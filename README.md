@@ -2,8 +2,11 @@
 
 这是 Open Door → Transport Food → Close Door 的全新双机运行时项目。
 
-当前仓库处于 **Stage 0：设计审查**。此阶段只有架构、协议、安全不变量和验收测试文档，
-没有能够连接推理服务、ROS 或真实机器人的执行代码。
+当前仓库已进入 **Stage 1/2：安全核心实现**。已经存在纯 Python 协议、状态机、审计事务、
+fake policy runtime 和回归测试；仍然没有连接 ROS、GPU 或真实机器人的执行入口。
+
+运行与部署目标仅包括 Agilex Linux 和 Surf Linux。Windows 只可作为编辑暂存环境，不属于运行平台，
+项目不提供 Windows 路径、服务、socket 或 signal 兼容层。
 
 ## 项目目标
 
@@ -47,7 +50,7 @@ Surf:   /home/surf2026/openpi/labs/oven_multiskill_runtime_v1
 
 ## 当前禁用事项
 
-在 Stage 0 设计审查通过前，不允许：
+在 fake-policy、双机无动作和 fake-robot 测试通过前，不允许：
 
 - 启动或停止 Surf 上的任何 policy server；
 - 建立推理隧道；
@@ -55,4 +58,3 @@ Surf:   /home/surf2026/openpi/labs/oven_multiskill_runtime_v1
 - 发布机器人 action；
 - 执行物理复位；
 - 迁移或覆盖 Checker 模型。
-

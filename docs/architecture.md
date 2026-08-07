@@ -2,6 +2,9 @@
 
 状态：Stage 0 设计提案。本文描述目标架构，不代表相关代码已经实现。
 
+运行平台固定为 Agilex Linux 与 Surf Linux。实现可以直接使用 Unix domain socket、POSIX signal、
+`fcntl`、systemd 和 OpenSSH，不设计或维护 Windows 运行兼容性。
+
 ## 1. 目标与边界
 
 系统完成三个左臂 Skill 的串联：
@@ -321,4 +324,3 @@ tests/
 4. Surf 推理仅通过 SSH tunnel 暴露，不开放局域网端口。
 
 这些决定在进入 Stage 1 前需要人工确认。
-
