@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+dist/
+build/
+*.egg-info/
+
+# Machine-local configuration and credentials
+config/sites/*.local.toml
+*.secret
+*.token
+
+# Runtime evidence and process state
+runtime/
+var/
+*.pid
+*.sock
+
+# Editor and operating-system files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
