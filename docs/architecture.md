@@ -1,6 +1,6 @@
 # 系统架构
 
-状态：Stage 0 设计提案。本文描述目标架构，不代表相关代码已经实现。
+状态：目标架构 + Stage 1/2 与 Stage 3 首批实现。未在“当前实现”中列出的组件仍是设计，不得误认为已完成。
 
 运行平台固定为 Agilex Linux 与 Surf Linux。实现可以直接使用 Unix domain socket、POSIX signal、
 `fcntl`、systemd 和 OpenSSH，不设计或维护 Windows 运行兼容性。
@@ -101,15 +101,22 @@ Agilex 通过 SSH local forwarding 访问。不存在面向局域网开放的控
 - `config.py`：TOML 加载、环境变量展开和 schema 校验。
 - `audit_schema.py`：manifest、stage evidence 和 request evidence 结构。
 - `hashing.py`：包含 dtype、shape、路径和值的稳定哈希。
+- `wire.py`：项目自有的 MessagePack/NumPy binary codec、64 MiB 上限和不安全 dtype 拒绝。
 
 `common` 必须可以在普通 CPU Python 环境运行测试。
 
 ### 3.2 `edge`
 
+当前已实现：
+
+- `control_client.py`：固定 `oven-serverctl --stdin-json` 远程命令，数据只走 JSON stdin，不拼接远端 shell 参数。
+- `inference_client.py`：只连接本机 SSH tunnel endpoint；逐字段和逐哈希验证 response；不自动重试。
+
+以下仍为目标组件：
+
 - `cli.py`：提供 `plan`、`doctor`、`status`、`run`、`abort`。
 - `orchestrator.py`：唯一允许推进流水线状态的组件。
 - `tunnel.py`：建立、检查和终止 SSH 隧道，不读取私钥内容。
-- `server_control.py`：通过 SSH 调用 Surf 的 `oven-serverctl`。
 - `observation.py`：采集带单调时钟时间戳的相机与关节 observation。
 - `reset.py`：根据校准轨迹执行有界物理复位。
 - `action_executor.py`：验证并发布 action chunk。
@@ -122,15 +129,20 @@ Agilex 通过 SSH local forwarding 访问。不存在面向局域网开放的控
 
 ### 3.3 `server`
 
-- `main.py`：组合依赖、绑定 loopback 推理端口和 Unix control socket。
-- `control.py`：处理状态、prepare、PRNG reset、session 和 abort 命令。
-- `runtime.py`：拥有 policy、generation、model state 和 active lease。
-- `inference_guard.py`：在进入 policy 前验证所有请求字段。
-- `executor.py`：持有完整 inference 临界区的唯一互斥锁。
-- `model_backend.py`：定义模型后端接口。
+当前已实现：
+
+- `app.py`：组合 fake backend，并绑定 loopback WebSocket 与 Unix control socket。
+- `control_server.py` / `control_protocol.py`：`0600` socket、`fcntl.flock` 单实例和严格命令 schema。
+- `control_cli.py`：受限参数 CLI 及 SSH JSON-stdin 模式。
+- `inference_server.py`：binary-only WebSocket 与 loopback bind 自检。
+- `runtime.py`：policy/generation/session/trial 状态与完整 inference 互斥临界区。
+- `backend.py` / `fake_backend.py`：后端协议和确定性测试后端。
+- `audit.py`：trial 证据、首个正式 action chunk 与含糊回包终止状态。
+
+以下仍为目标组件：
+
 - `composite_adapter_backend.py`：共享 base + 单 Skill adapter。
 - `full_checkpoint_backend.py`：完整 checkpoint 基线与回退后端。
-- `audit.py`：以 trial 为边界记录 observation/noise/action 哈希和首个 action chunk。
 
 ## 4. 状态模型
 
@@ -316,11 +328,12 @@ tests/
 
 模块导入不得依赖运行目录、`sys.path` 注入或 monkey patch。
 
-## 12. Stage 0 待确认决定
+## 12. 进入真实模型/机器人前仍需确认的决定
 
 1. 首个真机后端默认使用 Composite Adapter；Full Checkpoint 只做对照和回退。
 2. 三技能全流程默认只在 run 开始前执行一次双臂物理复位；阶段间依赖 Joint Gate 交接。
 3. Checker 权重迁移到 Agilex 独立资产根目录，不放入 Git。
 4. Surf 推理仅通过 SSH tunnel 暴露，不开放局域网端口。
 
-这些决定在进入 Stage 1 前需要人工确认。
+其中第 4 项已经由当前传输实现和测试固定。其余决定在接入真实 OpenPI backend、Checker 和物理复位前
+仍需要人工审查，不能由实现代码替用户决定。

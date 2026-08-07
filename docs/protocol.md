@@ -1,6 +1,6 @@
 # Edge–Server 协议
 
-状态：Stage 0 设计提案。协议实现前必须有跨版本协议测试。
+状态：协议 v1 实现中。session/generation/sequence、安全控制面和 fake 双进程传输已实现；真实 backend 尚未接入。
 
 ## 1. 设计目标
 
@@ -52,7 +52,7 @@ Agilex 建立本地转发：
 ### 2.3 编码与限制
 
 - 控制面：一条 JSON request/response，由 Unix socket framing 管理。
-- 推理面：WebSocket binary frame + msgpack-numpy。
+- 推理面：WebSocket binary frame + 项目自有 MessagePack NumPy ExtType codec，不依赖 OpenPI 或旧项目 codec。
 - text frame 一律拒绝。
 - 默认最大请求 64 MiB，配置只能降低，不能在真机 profile 中设为 unlimited。
 - 所有 schema 都携带 `protocol_version`。
@@ -329,4 +329,3 @@ session，禁止把相同 sequence 自动重发。
 
 首版只接受 `protocol_version=1`。未来新版本若无法完全保持安全语义，应使用新端口或显式配置，
 不得在同一 handler 中加入“缺字段也尝试执行”的兼容分支。
-

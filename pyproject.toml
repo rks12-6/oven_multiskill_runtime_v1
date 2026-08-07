@@ -9,9 +9,15 @@ description = "Fail-closed dual-host runtime for the oven multi-skill robot pipe
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+  "msgpack>=1.0",
   "numpy>=1.24",
   "tomli>=2.0; python_version < '3.11'",
+  "websockets>=14,<17",
 ]
+
+[project.scripts]
+oven-fake-server = "oven_runtime.server.app:main"
+oven-serverctl = "oven_runtime.server.control_cli:main"
 
 [project.optional-dependencies]
 test = ["pytest>=7"]
@@ -23,3 +29,9 @@ where = ["src"]
 testpaths = ["tests"]
 pythonpath = ["src"]
 
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "B", "UP", "SIM", "RUF"]

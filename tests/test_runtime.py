@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import tempfile
 import threading
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
-from oven_runtime.common.errors import ErrorCode, RuntimeFault
+from oven_runtime.common.errors import ErrorCode, RuntimeFault, fault
 from oven_runtime.server.audit import TrialAuditStore
 from oven_runtime.server.fake_backend import FakePolicyBackend
 from oven_runtime.server.runtime import PolicyRuntime
@@ -145,6 +146,42 @@ class PolicyRuntimeTests(unittest.TestCase):
         with self.assertRaises(RuntimeFault) as raised:
             runtime.begin_trial(trial_id="../escape", root_seed=0)
         self.assertEqual(raised.exception.code, ErrorCode.INVALID_FIELD_VALUE)
+
+    def test_transport_failure_after_inference_marks_trial_ambiguous(self) -> None:
+        harness = RuntimeHarness(self.root)
+        harness.warmup_and_ready()
+        harness.runtime.infer(request_payload(harness.session, kind="infer", sequence=1))
+        result = harness.runtime.mark_transport_ambiguous(
+            session_id=harness.session["session_id"],
+            sequence=1,
+        )
+        self.assertEqual(result["state"], "FAILED")
+        self.assertEqual(result["trial"]["status"], "AMBIGUOUS_INFERENCE")
+        manifest_path = self.root / "audit" / harness.session["trial_id"] / "server_manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        self.assertEqual(manifest["status"], "AMBIGUOUS_INFERENCE")
+        self.assertEqual(manifest["ambiguous_sequence"], 1)
+        with self.assertRaises(RuntimeFault) as raised:
+            harness.runtime.infer(request_payload(harness.session, kind="infer", sequence=2))
+        self.assertEqual(raised.exception.code, ErrorCode.SESSION_REQUIRED)
+
+    def test_audit_commit_failure_forces_failed_state(self) -> None:
+        harness = RuntimeHarness(self.root)
+        harness.warmup_and_ready()
+        harness.runtime.close_session(harness.session["session_id"])
+        with (
+            patch.object(
+                harness.audit,
+                "end",
+                side_effect=fault(ErrorCode.AUDIT_COMMIT_FAILED, "injected audit failure"),
+            ),
+            self.assertRaises(RuntimeFault) as raised,
+        ):
+            harness.runtime.end_trial()
+        self.assertEqual(raised.exception.code, ErrorCode.AUDIT_COMMIT_FAILED)
+        status = harness.runtime.status()
+        self.assertEqual(status["state"], "FAILED")
+        self.assertEqual(status["active_trial_id"], harness.session["trial_id"])
 
 
 if __name__ == "__main__":

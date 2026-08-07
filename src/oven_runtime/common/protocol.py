@@ -1,13 +1,13 @@
 from __future__ import annotations
 
+import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
-import re
-from typing import Any, Mapping
+from typing import Any
 from uuid import UUID
 
 from oven_runtime.common.errors import ErrorCode, fault
-
 
 PROTOCOL_VERSION = 1
 TRIAL_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z")
@@ -62,7 +62,7 @@ class InferenceRequest:
     observation: dict[str, Any]
 
     @classmethod
-    def parse(cls, payload: Any) -> "InferenceRequest":
+    def parse(cls, payload: Any) -> InferenceRequest:
         if not isinstance(payload, Mapping):
             raise fault(ErrorCode.INVALID_FIELD_TYPE, "inference request must be a mapping")
         fields = set(payload)

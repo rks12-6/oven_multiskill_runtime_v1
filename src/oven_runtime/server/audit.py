@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import json
 import os
-from pathlib import Path
 import threading
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -42,7 +42,6 @@ class ActiveTrial:
     request_count: int = 0
     first_action_hash: str | None = None
     last_action_hash: str | None = None
-    request_rows: list[dict[str, Any]] = field(default_factory=list)
 
 
 class TrialAuditStore:
@@ -120,7 +119,6 @@ class TrialAuditStore:
             except OSError as exc:
                 raise fault(ErrorCode.AUDIT_COMMIT_FAILED, "cannot append server request evidence") from exc
             active.request_count += 1
-            active.request_rows.append(dict(row))
             if row.get("request_kind") == "infer" and active.first_action_hash is None:
                 active.first_action_hash = action_hash
             if row.get("request_kind") == "infer":
@@ -151,6 +149,12 @@ class TrialAuditStore:
             return summary
 
     def abort(self, reason: str) -> dict[str, Any] | None:
+        return self._terminate("ABORTED", reason)
+
+    def mark_ambiguous(self, reason: str, *, sequence: int) -> dict[str, Any] | None:
+        return self._terminate("AMBIGUOUS_INFERENCE", reason, sequence=sequence)
+
+    def _terminate(self, status: str, reason: str, *, sequence: int | None = None) -> dict[str, Any] | None:
         with self._lock:
             active = self._active
             if active is None:
@@ -161,13 +165,15 @@ class TrialAuditStore:
                 "skill": active.skill,
                 "generation": active.generation,
                 "root_seed": active.root_seed,
-                "status": "ABORTED",
+                "status": status,
                 "reason": reason,
                 "request_count": active.request_count,
             }
+            if sequence is not None:
+                summary["ambiguous_sequence"] = sequence
             try:
                 _atomic_json(active.directory / "server_manifest.json", summary)
             except OSError as exc:
-                raise fault(ErrorCode.AUDIT_COMMIT_FAILED, "cannot abort server audit trial") from exc
+                raise fault(ErrorCode.AUDIT_COMMIT_FAILED, "cannot terminate server audit trial") from exc
             self._active = None
             return summary

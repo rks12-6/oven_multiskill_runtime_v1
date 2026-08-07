@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import os
+from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping
 
 from oven_runtime.common.errors import ErrorCode, fault
 
@@ -16,7 +16,7 @@ class RuntimeRoots:
     openpi: Path
 
     @classmethod
-    def from_environment(cls, environment: Mapping[str, str] | None = None) -> "RuntimeRoots":
+    def from_environment(cls, environment: Mapping[str, str] | None = None) -> RuntimeRoots:
         values = os.environ if environment is None else environment
         names = {
             "checkpoint": "OVEN_CHECKPOINT_ROOT",

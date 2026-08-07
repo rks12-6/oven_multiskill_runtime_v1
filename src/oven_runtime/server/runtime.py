@@ -1,16 +1,16 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import secrets
 import threading
 import time
-from typing import Any, Callable
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any
 from uuid import uuid4
 
 from oven_runtime.common.errors import ErrorCode, RuntimeFault, fault
 from oven_runtime.common.hashing import stable_tree_hash
-from oven_runtime.common.protocol import InferenceRequest, InferenceResponse, RequestKind
-from oven_runtime.common.protocol import TRIAL_ID_PATTERN
+from oven_runtime.common.protocol import TRIAL_ID_PATTERN, InferenceRequest, InferenceResponse, RequestKind
 from oven_runtime.common.state import RuntimeState, SessionState, ensure_runtime_transition
 from oven_runtime.server.audit import TrialAuditStore
 from oven_runtime.server.backend import BackendIdentity, PolicyBackend
@@ -290,7 +290,11 @@ class PolicyRuntime:
                 raise fault(ErrorCode.SESSION_ALREADY_ACTIVE, "close the active session before ending the trial")
             if self._trial_id is None:
                 raise fault(ErrorCode.TRIAL_REQUIRED, "no active trial")
-            summary = self._audit.end()
+            try:
+                summary = self._audit.end()
+            except RuntimeFault:
+                self._fail_locked(ErrorCode.AUDIT_COMMIT_FAILED)
+                raise
             self._trial_id = None
             self._trial_root_seed = None
             return summary
@@ -298,18 +302,56 @@ class PolicyRuntime:
     def abort(self, reason: str) -> dict[str, Any]:
         with self._condition:
             self._invalidate_session_locked(SessionState.ABORTED)
-            summary = self._audit.abort(reason)
+            try:
+                summary = self._audit.abort(reason)
+            except RuntimeFault:
+                self._fail_locked(ErrorCode.AUDIT_COMMIT_FAILED)
+                raise
+            self._trial_id = None
+            self._trial_root_seed = None
+            self._fail_locked(ErrorCode.SERVER_FAILED)
+            return {"state": self._state.value, "trial": summary}
+
+    def mark_transport_ambiguous(self, *, session_id: str, sequence: int) -> dict[str, Any]:
+        """Fail closed after inference ran but its response couldn't be confirmed sent."""
+
+        with self._condition:
+            lease = self._session
+            if lease is None or lease.session_id != session_id:
+                return {"state": self._state.value, "trial": None}
+            self._invalidate_session_locked(SessionState.ABORTED)
+            try:
+                summary = self._audit.mark_ambiguous(
+                    "inference response transport failed",
+                    sequence=sequence,
+                )
+            except RuntimeFault:
+                self._fail_locked(ErrorCode.AUDIT_COMMIT_FAILED)
+                raise
             self._trial_id = None
             self._trial_root_seed = None
             self._fail_locked(ErrorCode.SERVER_FAILED)
             return {"state": self._state.value, "trial": summary}
 
     def close(self) -> None:
+        audit_error: RuntimeFault | None = None
         with self._condition:
             if self._state is not RuntimeState.STOPPING:
                 self._transition_locked(RuntimeState.STOPPING)
             self._invalidate_session_locked(SessionState.ABORTED)
-        self._backend.close()
+            if self._trial_id is not None:
+                try:
+                    self._audit.abort("server shutdown")
+                except RuntimeFault as exc:
+                    audit_error = exc
+                else:
+                    self._trial_id = None
+                    self._trial_root_seed = None
+        try:
+            self._backend.close()
+        finally:
+            if audit_error is not None:
+                raise audit_error
 
     def _validate_request_locked(self, request: InferenceRequest) -> SessionLease:
         lease = self._session

@@ -2,8 +2,9 @@
 
 这是 Open Door → Transport Food → Close Door 的全新双机运行时项目。
 
-当前仓库已进入 **Stage 1/2：安全核心实现**。已经存在纯 Python 协议、状态机、审计事务、
-fake policy runtime 和回归测试；仍然没有连接 ROS、GPU 或真实机器人的执行入口。
+当前仓库已完成 **Stage 1/2 安全核心**与 **Stage 3 传输层首批实现**。已经存在纯 Python 协议、
+状态机、审计事务、fake policy runtime、`0600` Unix 控制 socket、loopback-only WebSocket、
+SSH 控制客户端和双进程回归测试；仍然没有连接 ROS、GPU 或真实机器人的执行入口。
 
 运行与部署目标仅包括 Agilex Linux 和 Surf Linux。Windows 只可作为编辑暂存环境，不属于运行平台，
 项目不提供 Windows 路径、服务、socket 或 signal 兼容层。
@@ -58,3 +59,19 @@ Surf:   /home/surf2026/openpi/labs/oven_multiskill_runtime_v1
 - 发布机器人 action；
 - 执行物理复位；
 - 迁移或覆盖 Checker 模型。
+
+## 当前可运行的 Linux 验证
+
+无需 ROS、GPU 或旧项目代码：
+
+```bash
+cd /path/to/oven_multiskill_runtime_v1
+PYTHONPATH=src python -m unittest discover -s tests -v
+```
+
+截至当前提交，Agilex Python 3.10 与 Surf OpenPI Python 3.11 均通过 37 项测试。测试包含真实独立
+server 子进程、Unix socket 权限、单实例 `flock`、WebSocket binary frame、warm-up、PRNG reset、
+正式 inference、response 哈希校验、审计提交和含糊回包 fail-closed。
+
+这不代表 L3 全部完成：多次 Skill 切换、更多断线故障注入、Edge orchestrator、fake robot、ROS 与
+真实 OpenPI backend 尚未实现。

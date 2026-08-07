@@ -4,7 +4,7 @@ import unittest
 from uuid import uuid4
 
 from oven_runtime.common.errors import ErrorCode, RuntimeFault
-from oven_runtime.common.protocol import InferenceRequest, REQUIRED_REQUEST_FIELDS
+from oven_runtime.common.protocol import REQUIRED_REQUEST_FIELDS, InferenceRequest
 
 
 def valid_payload() -> dict[str, object]:
