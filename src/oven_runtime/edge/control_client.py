@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import threading
+from pathlib import PurePosixPath
 from collections.abc import Callable, Sequence
 from typing import Any
 from uuid import UUID
@@ -19,7 +21,8 @@ class SshControlClient:
         host_alias: str,
         *,
         remote_program: str = "oven-serverctl",
-        timeout_sec: float = 30.0,
+        remote_runtime_root: str | None = None,
+        timeout_sec: float = 180.0,
         runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
     ) -> None:
         if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", host_alias) is None:
@@ -30,8 +33,15 @@ class SshControlClient:
             raise ValueError("timeout_sec must be positive")
         self.host_alias = host_alias
         self.remote_program = remote_program
+        if remote_runtime_root is not None:
+            root = PurePosixPath(remote_runtime_root)
+            if not root.is_absolute() or ".." in root.parts:
+                raise ValueError("remote_runtime_root must be a normalized absolute POSIX path")
+        self.remote_runtime_root = remote_runtime_root
         self.timeout_sec = timeout_sec
         self._runner = runner
+        self._server_instance_id: str | None = None
+        self._instance_lock = threading.Lock()
 
     def call(self, command: str, *arguments: str | int) -> dict[str, Any]:
         control_arguments = _command_arguments(command, arguments)
@@ -49,8 +59,13 @@ class SshControlClient:
             "BatchMode=yes",
             self.host_alias,
             self.remote_program,
-            "--stdin-json",
         ]
+        if self.remote_runtime_root is not None:
+            argv.extend(["--socket", f"{self.remote_runtime_root}/control/oven-server.sock"])
+        argv.extend(["--timeout-sec", str(self.timeout_sec)])
+        argv.extend([
+            "--stdin-json",
+        ])
         try:
             completed = self._runner(
                 argv,
@@ -69,7 +84,14 @@ class SshControlClient:
             response = json.loads(completed.stdout)
         except json.JSONDecodeError as exc:
             raise fault(ErrorCode.FRAME_DECODE_FAILED, "SSH control response is not valid JSON") from exc
-        return validate_control_response(command, response)
+        validated = validate_control_response(command, response)
+        instance_id = validated["server_instance_id"]
+        with self._instance_lock:
+            if self._server_instance_id is None:
+                self._server_instance_id = instance_id
+            elif self._server_instance_id != instance_id:
+                raise fault(ErrorCode.RESPONSE_MISMATCH, "control server instance changed during this client run")
+        return validated
 
 
 def _command_arguments(command: str, values: Sequence[str | int]) -> dict[str, Any]:
@@ -78,7 +100,6 @@ def _command_arguments(command: str, values: Sequence[str | int]) -> dict[str, A
         "prepare-skill": ("skill",),
         "begin-trial": ("trial_id", "root_seed"),
         "open-session": (),
-        "reset-prng": ("seed",),
         "close-session": ("session_id",),
         "end-trial": (),
         "abort": ("reason",),

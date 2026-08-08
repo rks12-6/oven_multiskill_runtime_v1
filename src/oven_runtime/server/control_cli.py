@@ -22,6 +22,7 @@ def _parser() -> argparse.ArgumentParser:
         help="Unix socket path; defaults to $OVEN_RUNTIME_ROOT/control/oven-server.sock",
     )
     parser.add_argument("--stdin-json", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--timeout-sec", type=float, default=180.0)
     subparsers = parser.add_subparsers(dest="command")
     subparsers.add_parser("status")
     prepare = subparsers.add_parser("prepare-skill")
@@ -30,8 +31,6 @@ def _parser() -> argparse.ArgumentParser:
     begin.add_argument("trial_id")
     begin.add_argument("root_seed", type=int)
     subparsers.add_parser("open-session")
-    reset = subparsers.add_parser("reset-prng")
-    reset.add_argument("seed", type=int)
     close = subparsers.add_parser("close-session")
     close.add_argument("session_id")
     subparsers.add_parser("end-trial")
@@ -45,8 +44,6 @@ def _arguments(namespace: argparse.Namespace) -> dict[str, Any]:
         return {"skill": namespace.skill}
     if namespace.command == "begin-trial":
         return {"trial_id": namespace.trial_id, "root_seed": namespace.root_seed}
-    if namespace.command == "reset-prng":
-        return {"seed": namespace.seed}
     if namespace.command == "close-session":
         return {"session_id": namespace.session_id}
     if namespace.command == "abort":
@@ -78,11 +75,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 payload = json.loads(raw)
             except (UnicodeDecodeError, json.JSONDecodeError) as exc:
                 raise fault(ErrorCode.FRAME_DECODE_FAILED, "stdin control request is not valid UTF-8 JSON") from exc
-            response = control_exchange(socket_path, payload)
+            response = control_exchange(socket_path, payload, timeout_sec=namespace.timeout_sec)
         else:
             if namespace.command is None:
                 parser.error("a subcommand is required")
-            response = control_request(socket_path, namespace.command, _arguments(namespace))
+            response = control_request(
+                socket_path,
+                namespace.command,
+                _arguments(namespace),
+                timeout_sec=namespace.timeout_sec,
+            )
     except RuntimeFault as exc:
         response = exc.to_dict()
     print(json.dumps(response, separators=(",", ":"), ensure_ascii=False))

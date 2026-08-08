@@ -6,6 +6,7 @@ from enum import Enum
 
 class EvidenceStatus(str, Enum):
     NOT_RUN = "NOT_RUN"
+    NOT_REQUIRED = "NOT_REQUIRED"
     PASSED = "PASSED"
     FAILED = "FAILED"
     INCOMPLETE = "INCOMPLETE"
@@ -28,8 +29,7 @@ class StageEvidence:
             and self.rollout_end_reason is not None
             and self.rollout_end_reason_approved
             and self.joint_gate is EvidenceStatus.PASSED
-            and self.checker is EvidenceStatus.PASSED
+            and self.checker in {EvidenceStatus.PASSED, EvidenceStatus.NOT_REQUIRED}
             and self.server_audit is EvidenceStatus.PASSED
             and self.edge_audit is EvidenceStatus.PASSED
         )
-

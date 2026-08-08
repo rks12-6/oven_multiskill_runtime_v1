@@ -78,7 +78,9 @@ class ControlProtocolTests(unittest.TestCase):
         response = SshControlClient("robot-surf", runner=runner).call("status")
         self.assertTrue(response["ok"])
         argv, kwargs = calls[0]
-        self.assertEqual(argv[-2:], ["oven-serverctl", "--stdin-json"])
+        self.assertEqual(argv[-1], "--stdin-json")
+        self.assertIn("oven-serverctl", argv)
+        self.assertIn("--timeout-sec", argv)
         self.assertIs(kwargs["shell"], False)
         self.assertEqual(
             kwargs["input"],

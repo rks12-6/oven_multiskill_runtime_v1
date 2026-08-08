@@ -14,7 +14,6 @@ TRIAL_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z")
 
 
 class RequestKind(str, Enum):
-    WARMUP = "warmup"
     INFER = "infer"
 
 

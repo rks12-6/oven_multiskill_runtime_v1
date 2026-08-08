@@ -20,11 +20,15 @@ from oven_runtime.server.runtime import PolicyRuntime
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="oven-fake-server")
+    parser = argparse.ArgumentParser(prog="oven-server")
     parser.add_argument("--runtime-root", type=Path, default=None)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=19110)
     parser.add_argument("--ready-file", type=Path, default=None)
+    parser.add_argument("--backend", choices=("fake", "openpi-composite"), default="fake")
+    parser.add_argument("--backend-profile", type=Path, default=None)
+    parser.add_argument("--artifact-root", type=Path, default=None)
+    parser.add_argument("--checkpoint-root", type=Path, default=None)
     return parser
 
 
@@ -37,11 +41,18 @@ def _runtime_root(value: Path | None, parser: argparse.ArgumentParser) -> Path:
     return Path(configured).expanduser().resolve()
 
 
-async def run_server(runtime_root: Path, host: str, port: int, ready_file: Path | None) -> None:
+async def run_server(
+    runtime_root: Path,
+    host: str,
+    port: int,
+    ready_file: Path | None,
+    *,
+    backend: object | None = None,
+) -> None:
     runtime_root.mkdir(parents=True, exist_ok=True)
     os.chmod(runtime_root, 0o700)
     runtime = PolicyRuntime(
-        backend=FakePolicyBackend(),
+        backend=backend or FakePolicyBackend(),
         audit=TrialAuditStore(runtime_root / "audit"),
     )
     instance_id = str(uuid4())
@@ -84,8 +95,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = _parser()
     namespace = parser.parse_args(argv)
     root = _runtime_root(namespace.runtime_root, parser)
+    backend: object = FakePolicyBackend()
+    if namespace.backend == "openpi-composite":
+        if namespace.backend_profile is None or namespace.artifact_root is None or namespace.checkpoint_root is None:
+            parser.error("openpi-composite requires --backend-profile, --artifact-root, and --checkpoint-root")
+        from oven_runtime.server.composite_backend import OpenPiCompositeBackend, load_composite_profile
+
+        backend = OpenPiCompositeBackend(
+            load_composite_profile(
+                namespace.backend_profile,
+                artifact_root=namespace.artifact_root,
+                checkpoint_root=namespace.checkpoint_root,
+            )
+        )
     try:
-        asyncio.run(run_server(root, namespace.host, namespace.port, namespace.ready_file))
+        asyncio.run(run_server(root, namespace.host, namespace.port, namespace.ready_file, backend=backend))
     except KeyboardInterrupt:
         return 130
     return 0

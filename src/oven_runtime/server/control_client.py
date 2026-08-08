@@ -10,7 +10,7 @@ from oven_runtime.common.protocol import PROTOCOL_VERSION
 from oven_runtime.server.control_server import MAX_CONTROL_FRAME_BYTES
 
 
-def control_request(path: Path, command: str, arguments: dict[str, Any], *, timeout_sec: float = 10.0) -> dict[str, Any]:
+def control_request(path: Path, command: str, arguments: dict[str, Any], *, timeout_sec: float = 180.0) -> dict[str, Any]:
     return control_exchange(
         path,
         {

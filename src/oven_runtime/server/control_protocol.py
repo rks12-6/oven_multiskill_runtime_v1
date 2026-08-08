@@ -14,7 +14,6 @@ CONTROL_COMMANDS = frozenset(
         "prepare-skill",
         "begin-trial",
         "open-session",
-        "reset-prng",
         "close-session",
         "end-trial",
         "abort",
@@ -123,9 +122,6 @@ class ControlDispatcher:
                 trial_id=_string(arguments, "trial_id"),
                 root_seed=_integer(arguments, "root_seed"),
             )
-        if command == "reset-prng":
-            _expect_arguments(arguments, {"seed"})
-            return self._runtime.reset_prng(_integer(arguments, "seed"))
         if command == "close-session":
             _expect_arguments(arguments, {"session_id"})
             return self._runtime.close_session(_string(arguments, "session_id"))

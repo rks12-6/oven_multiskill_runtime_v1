@@ -29,8 +29,7 @@ class PolicyBackend(Protocol):
         """Run exactly one stateful policy inference."""
 
     def reset_prng(self, seed: int) -> None:
-        """Reset the policy PRNG after warm-up."""
+        """Initialize the policy PRNG for a formal trial."""
 
     def close(self) -> None:
         """Release backend resources."""
-

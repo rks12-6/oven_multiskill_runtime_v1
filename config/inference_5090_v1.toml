@@ -1,0 +1,26 @@
+schema_version = 1
+shared_params_relative_path = "shared_trained_base/params"
+
+[skills.open_door]
+config_name = "pi05_od_201ep_lf7_b8_s40k_0717"
+checkpoint_relative_path = "pi05_od_201ep_lf7_b8_s40k_0717/train/39999"
+adapter_relative_path = "composite_adapters/open_door/params"
+manifest_relative_path = "composite_adapters/open_door/manifest.json"
+
+[skills.transport_food]
+config_name = "pi05_tf_220ep_lf7_b8_s40k_0715"
+checkpoint_relative_path = "pi05_tf_220ep_lf7_b8_s40k_0715/train/39999"
+adapter_relative_path = "composite_adapters/transport_food/params"
+manifest_relative_path = "composite_adapters/transport_food/manifest.json"
+
+[skills.close_door]
+config_name = "pi05_cd_205ep_lf7_b8_s40k_0717"
+checkpoint_relative_path = "pi05_cd_205ep_lf7_b8_s40k_0717/train/28000"
+adapter_relative_path = "composite_adapters/close_door/params"
+manifest_relative_path = "composite_adapters/close_door/manifest.json"
+
+[skills.rotate_button]
+config_name = "pi05_rb_train200_rf7_b16_s40k_0804"
+checkpoint_relative_path = "pi05_rb_train200_rf7_b16_s40k_0804/train/39999"
+adapter_relative_path = "composite_adapters/rotate_button/params"
+manifest_relative_path = "composite_adapters/rotate_button/manifest.json"

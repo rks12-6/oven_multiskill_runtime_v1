@@ -111,20 +111,20 @@ Agilex 通过 SSH local forwarding 访问。不存在面向局域网开放的控
 
 - `control_client.py`：固定 `oven-serverctl --stdin-json` 远程命令，数据只走 JSON stdin，不拼接远端 shell 参数。
 - `inference_client.py`：只连接本机 SSH tunnel endpoint；逐字段和逐哈希验证 response；不自动重试。
+- `orchestrator.py`：固定三 Skill 状态推进、人工批准、warm-up/reset/rollout/gate/checker/handoff。
+- `ros2_observation.py`：只订阅 Agilex joint/camera topic，不创建 publisher；提供只读现场采样。
+- `ros2_action.py`：唯一 action publisher、右臂保持、左臂复位和有界发布。
+- `joint_gate.py`：在线 departure→stable-return gate 与阶段末结构化 gate。
+- `checker.py`：相对资产路径、SHA256 和安全 checkpoint 加载。
+- `audit.py`：Edge run/stage/rollout 结构化证据。
+- `app.py` / `tunnel.py`：真实 Edge 组合入口和 loopback SSH inference tunnel。
 
 以下仍为目标组件：
 
-- `cli.py`：提供 `plan`、`doctor`、`status`、`run`、`abort`。
-- `orchestrator.py`：唯一允许推进流水线状态的组件。
-- `tunnel.py`：建立、检查和终止 SSH 隧道，不读取私钥内容。
-- `observation.py`：采集带单调时钟时间戳的相机与关节 observation。
-- `reset.py`：根据校准轨迹执行有界物理复位。
-- `action_executor.py`：验证并发布 action chunk。
-- `joint_gate.py`：以结构化结果判断回到安全/交接姿态。
-- `checker.py`：加载项目资产目录中的 Checker 模型并返回结构化结果。
-- `audit.py`：原子写入 edge manifest、关节轨迹和阶段证据。
+- recording-only executor。
+- 真机 `doctor`、外部急停状态输入和 systemd 部署。
 
-只有 `action_executor.py` 可以创建机器人动作 publisher。Observation、Checker、warm-up 和
+只有 `ros2_action.py` 可以创建机器人动作 publisher。Observation、Checker、warm-up 和
 审计模块不得创建任何动作 publisher。
 
 ### 3.3 `server`

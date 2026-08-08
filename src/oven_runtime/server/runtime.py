@@ -121,7 +121,7 @@ class PolicyRuntime:
             self._active_skill = skill
             self._identity = identity
             self._generation += 1
-            self._transition_locked(RuntimeState.WARMUP_REQUIRED)
+            self._transition_locked(RuntimeState.READY)
             return self.status()
 
     def begin_trial(self, *, trial_id: str, root_seed: int) -> dict[str, Any]:
@@ -129,24 +129,38 @@ class PolicyRuntime:
             raise fault(ErrorCode.INVALID_FIELD_VALUE, "trial_id format is invalid")
         if not isinstance(root_seed, int) or isinstance(root_seed, bool):
             raise fault(ErrorCode.INVALID_FIELD_TYPE, "root_seed must be an integer")
-        with self._condition:
-            if self._state is not RuntimeState.WARMUP_REQUIRED:
-                raise fault(ErrorCode.STATE_REJECTED, "trial can begin only when warm-up is required", state=self._state.value)
-            if self._active_skill is None:
-                raise fault(ErrorCode.SERVER_FAILED, "runtime has no active skill")
-            active = self._audit.begin(
-                trial_id=trial_id,
-                skill=self._active_skill,
-                generation=self._generation,
-                root_seed=root_seed,
-            )
-            self._trial_id = active.trial_id
-            self._trial_root_seed = root_seed
-            return self.status()
+        if not self._execution_lock.acquire(timeout=self._inference_lock_timeout_sec):
+            raise fault(ErrorCode.INFERENCE_BUSY, "cannot acquire policy execution lock for trial initialization")
+        try:
+            with self._condition:
+                if self._state is not RuntimeState.READY:
+                    raise fault(ErrorCode.STATE_REJECTED, "trial can begin only when runtime is ready", state=self._state.value)
+                if self._trial_id is not None:
+                    raise fault(ErrorCode.STATE_REJECTED, "another trial is already active")
+                if self._active_skill is None:
+                    raise fault(ErrorCode.SERVER_FAILED, "runtime has no active skill")
+                self._backend.reset_prng(root_seed)
+                active = self._audit.begin(
+                    trial_id=trial_id,
+                    skill=self._active_skill,
+                    generation=self._generation,
+                    root_seed=root_seed,
+                )
+                self._trial_id = active.trial_id
+                self._trial_root_seed = root_seed
+                return self.status()
+        except RuntimeFault:
+            raise
+        except Exception as exc:
+            with self._condition:
+                self._fail_locked(ErrorCode.POLICY_FAILED)
+            raise fault(ErrorCode.POLICY_FAILED, "policy backend failed to initialize trial PRNG") from exc
+        finally:
+            self._execution_lock.release()
 
     def open_session(self) -> dict[str, Any]:
         with self._condition:
-            if self._state not in {RuntimeState.WARMUP_REQUIRED, RuntimeState.READY}:
+            if self._state is not RuntimeState.READY:
                 raise fault(ErrorCode.STATE_REJECTED, "session cannot open in the current state", state=self._state.value)
             if self._trial_id is None or self._active_skill is None:
                 raise fault(ErrorCode.TRIAL_REQUIRED, "begin a trial before opening a session")
@@ -169,29 +183,6 @@ class PolicyRuntime:
                 "trial_id": lease.trial_id,
                 "expires_in_sec": self._session_ttl_sec,
             }
-
-    def reset_prng(self, seed: int) -> dict[str, Any]:
-        with self._condition:
-            if self._state is not RuntimeState.PRNG_RESET_REQUIRED:
-                raise fault(ErrorCode.STATE_REJECTED, "PRNG reset is not allowed in the current state", state=self._state.value)
-            if self._trial_root_seed != seed:
-                raise fault(ErrorCode.INVALID_FIELD_VALUE, "PRNG seed does not match the active trial root seed")
-        if not self._execution_lock.acquire(timeout=self._inference_lock_timeout_sec):
-            raise fault(ErrorCode.INFERENCE_BUSY, "cannot acquire policy execution lock for PRNG reset")
-        try:
-            with self._condition:
-                if self._state is not RuntimeState.PRNG_RESET_REQUIRED or self._trial_root_seed != seed:
-                    raise fault(ErrorCode.STATE_REJECTED, "runtime changed while waiting to reset PRNG")
-            self._backend.reset_prng(seed)
-        except Exception as exc:
-            with self._condition:
-                self._fail_locked(ErrorCode.POLICY_FAILED)
-            raise fault(ErrorCode.POLICY_FAILED, "policy backend failed to reset PRNG") from exc
-        finally:
-            self._execution_lock.release()
-        with self._condition:
-            self._transition_locked(RuntimeState.READY)
-            return self.status()
 
     def infer(self, payload: Any) -> dict[str, Any]:
         request = InferenceRequest.parse(payload)
@@ -249,15 +240,13 @@ class PolicyRuntime:
                     self._fail_locked(ErrorCode.SESSION_INVALID)
                     raise fault(ErrorCode.SESSION_INVALID, "session changed during inference")
                 lease.next_sequence += 1
-                if request.request_kind is RequestKind.WARMUP:
-                    self._transition_locked(RuntimeState.PRNG_RESET_REQUIRED)
                 response = InferenceResponse(
                     session_id=request.session_id,
                     trial_id=request.trial_id,
                     skill=request.expected_skill,
                     generation=request.expected_generation,
                     sequence=request.sequence,
-                    publishable=request.request_kind is RequestKind.INFER,
+                    publishable=True,
                     request_hash=request_hash,
                     observation_hash=observation_hash,
                     noise_hash=backend_result.noise_hash,
@@ -300,17 +289,23 @@ class PolicyRuntime:
             return summary
 
     def abort(self, reason: str) -> dict[str, Any]:
-        with self._condition:
-            self._invalidate_session_locked(SessionState.ABORTED)
-            try:
-                summary = self._audit.abort(reason)
-            except RuntimeFault:
-                self._fail_locked(ErrorCode.AUDIT_COMMIT_FAILED)
-                raise
-            self._trial_id = None
-            self._trial_root_seed = None
-            self._fail_locked(ErrorCode.SERVER_FAILED)
-            return {"state": self._state.value, "trial": summary}
+        if not self._execution_lock.acquire(timeout=30.0):
+            with self._condition:
+                self._fail_locked(ErrorCode.INFERENCE_TIMEOUT)
+            raise fault(ErrorCode.INFERENCE_TIMEOUT, "timed out waiting for active inference before abort")
+        try:
+            with self._condition:
+                self._invalidate_session_locked(SessionState.ABORTED)
+                try:
+                    summary = self._audit.abort(reason)
+                except RuntimeFault:
+                    self._fail_locked(ErrorCode.AUDIT_COMMIT_FAILED)
+                    raise
+                self._trial_id = None
+                self._trial_root_seed = None
+                return {"state": self._state.value, "trial": summary}
+        finally:
+            self._execution_lock.release()
 
     def mark_transport_ambiguous(self, *, session_id: str, sequence: int) -> dict[str, Any]:
         """Fail closed after inference ran but its response couldn't be confirmed sent."""
@@ -375,8 +370,9 @@ class PolicyRuntime:
                 expected=lease.next_sequence,
                 received=request.sequence,
             )
-        expected_state = RuntimeState.WARMUP_REQUIRED if request.request_kind is RequestKind.WARMUP else RuntimeState.READY
-        if self._state is not expected_state:
+        if request.request_kind is not RequestKind.INFER:
+            raise fault(ErrorCode.INVALID_FIELD_VALUE, "warm-up requests are not supported")
+        if self._state is not RuntimeState.READY:
             raise fault(
                 ErrorCode.STATE_REJECTED,
                 "request kind is not allowed in the current state",

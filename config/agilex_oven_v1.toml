@@ -1,0 +1,154 @@
+schema_version = 1
+
+[server]
+ssh_host_alias = "oven-inference"
+local_inference_uri = "ws://127.0.0.1:19110"
+remote_inference_port = 19110
+inference_timeout_sec = 120.0
+remote_control_program = "/home/amax/openpi/.venv/bin/oven-serverctl"
+remote_runtime_root = "/home/amax/oven_runtime_v1"
+
+[ros]
+left_joint_topic = "/puppet/joint_left"
+right_joint_topic = "/puppet/joint_right"
+left_command_topic = "/joint_left_states"
+right_command_topic = "/joint_right_states"
+left_camera_topic = "/camera_l/color/image_raw"
+right_camera_topic = "/camera_r/color/image_raw"
+front_camera_topic = "/camera_f/color/image_raw"
+image_size = 224
+max_message_age_sec = 0.5
+observation_max_age_ms = 500.0
+preflight_timeout_sec = 5.0
+publish_hz = 30.0
+reset_duration_sec = 4.0
+reset_tolerance = 0.03
+reset_verify_timeout_sec = 3.0
+settle_sec = 3.0
+stop_hold_repetitions = 3
+
+[action]
+dimension = 7
+chunk_rows = 50
+max_absolute_value = 6.5
+chunk_transition_steps = 50
+chunk_transition_hz = 200.0
+max_row_delta = [0.15, 0.15, 0.15, 0.15, 0.15, 0.15, 0.08]
+
+[skills.open_door]
+arm = "left"
+prompt = "open the door"
+root_seed = 0
+max_chunks = 20
+reset_before = true
+checker_required = true
+approved_end_reasons = ["joint_rest_detected"]
+reset_target = [0.08833111344341071, 0.0, -0.003979350694546067, 0.05197590512437801, 0.3677757799801522, 0.02246238747316135, 0.0003]
+
+[skills.open_door.gate]
+targets = [
+  [0.0, 0.008168140899331402, -0.00172787595947395, 0.1584235362034853, 0.19668115340719133, -0.1203229986324587, 0.001],
+  [-0.03782128489070757, 0.01932079481957235, -0.0012566370614356, 0.07707373976805014, 0.24820327292605093, 0.049776790266865704, 0.0],
+  [-0.10374237073851676, 0.0, -0.001850049007113522, 0.18898425140589828, 0.24945990998748652, -0.048118727477471514, 0.0001],
+]
+check_indices = [0, 1, 2, 3, 4, 5]
+tolerance = [0.075, 0.03, 0.04, 0.11, 0.075, 0.12]
+departure_threshold = 0.10
+min_publish_step = 200
+window_samples = 200
+max_spread = 0.05
+
+[skills.open_door.checker]
+model_relative_path = "checkers/open_door/model_best.pth"
+model_sha256 = "85a6486f254c0d31037e2126c50091ee07eee88733f456eef99eab4d05a7af2b"
+success_class = "success_fully_open_down"
+threshold = 0.8
+preprocessing = "resize"
+
+[skills.transport_food]
+arm = "left"
+prompt = "transport the food"
+root_seed = 0
+max_chunks = 20
+reset_before = false
+checker_required = true
+approved_end_reasons = ["joint_rest_detected"]
+reset_target = [0.08833111344341071, 0.0, -0.003979350694546067, 0.05197590512437801, 0.3677757799801522, 0.02246238747316135, 0.0003]
+
+[skills.transport_food.gate]
+targets = [
+  [-0.03586651612847442, 0.057718038363437904, -0.02864085302521972, 0.060772364554427215, 0.3758741077094039, -0.014398966328949582, 0.0003],
+  [0.014294246573829949, 0.02895501229057862, -0.03708824660487014, -0.0520631715869777, 0.3001093648803492, 0.06487388829661285, 0.0003],
+  [0.0304734487398133, 0.004084070449665701, -0.03803072440094683, 0.0, 0.33716270490017947, -0.031171580440610854, 0.0003],
+  [0.021868975527483427, 0.0, -0.059271381397712465, 0.0307876080051722, 0.3221179667479921, 0.04487241506876288, 0.0003],
+  [0.008552113334770056, 0.011257373675360585, -0.004049163864625822, 0.10208430794912257, 0.35257396219528553, -0.19718729889026956, 0.0003],
+  [0.025743606466909864, 0.0022340214425521777, -0.002408554367751567, 0.01352630170295264, 0.3244218013606241, 0.04392993727268618, 0.0001],
+  [0.0004188790204785333, 0.003001966313429489, -0.0019198621771932779, -0.10662216400430667, 0.27501153023667707, 0.13629276128820278, 0.0001],
+  [0.011990411961198018, 0.003316125578788389, -0.0023387411976718113, -0.06716026961672485, 0.3005631504858676, 0.1104095284811334, 0.0001],
+]
+check_indices = [0, 1, 2, 3, 4, 5]
+tolerance = [0.08, 0.05, 0.05, 0.08, 0.08, 0.05]
+departure_threshold = 0.10
+min_publish_step = 100
+window_samples = 100
+max_spread = 0.05
+
+[skills.transport_food.checker]
+model_relative_path = "checkers/transport_food/model_best.pth"
+model_sha256 = "3805475f5d5a9744ee04596d81fdcf8b6c0e12c938eff20c8f94e377d5bac14e"
+success_class = "success_food_inside_oven"
+threshold = 0.8
+preprocessing = "resize_center_crop"
+
+[skills.close_door]
+arm = "left"
+prompt = "close the door"
+root_seed = 0
+max_chunks = 20
+reset_before = false
+checker_required = true
+approved_end_reasons = ["joint_rest_detected"]
+reset_target = [0.08833111344341071, 0.0, -0.003979350694546067, 0.05197590512437801, 0.3677757799801522, 0.02246238747316135, 0.0003]
+
+[skills.close_door.gate]
+targets = [
+  [-0.18739600178658386, 0.07546803685621575, -0.0013962634015951111, 0.18599973838498873, 0.4713436177934696, -0.276460153515832, -0.0003],
+  [-0.061540309425304515, 0.011414453308040034, -0.0138230076757916, -0.014398966328949582, 0.3521550831748069, 0.04731587602155432, -0.0001],
+  [-0.01951278103729168, 0.0, -0.0016755160819141332, 0.15906930802672303, 0.4199262180297296, -0.0849102681095027, -0.0002],
+]
+check_indices = [0, 1, 2, 3, 4, 5]
+tolerance = [0.065, 0.05, 0.05, 0.14, 0.085, 0.16]
+departure_threshold = 0.10
+min_publish_step = 150
+window_samples = 200
+max_spread = 0.05
+
+[skills.close_door.checker]
+model_relative_path = "checkers/close_door/model_best.pth"
+model_sha256 = "02d3ec61f6558b58e0e703f183d90eb9c38ba263abe1409c1a73536bec1b9bb8"
+success_class = "success_fully_closed"
+threshold = 0.8
+preprocessing = "resize"
+
+[skills.rotate_button]
+arm = "right"
+prompt = "rotate the button"
+root_seed = 0
+max_chunks = 20
+reset_before = true
+checker_required = false
+approved_end_reasons = ["joint_rest_detected"]
+reset_target = [0.004886921905582889, 0.0008552113334770056, -0.0032463124087086337, 0.01239183768915661, 0.011903145498598323, 0.0, 0.0003]
+
+[skills.rotate_button.gate]
+targets = [
+  [0.04248131399353125, 0.002932153143349733, -0.000392699081698625, -0.13178981181805854, 0.29348584036903236, 0.1383173432205157, 0.0],
+]
+check_indices = [0, 1, 2]
+tolerance = [0.08, 0.10, 0.03]
+departure_threshold = 0.10
+min_publish_step = 300
+window_samples = 100
+max_spread = 0.03
+arming_indices = [1]
+arming_min_abs_position = [1.0]
