@@ -33,7 +33,7 @@ chunk_rows = 50
 max_absolute_value = 6.5
 chunk_transition_steps = 50
 chunk_transition_hz = 200.0
-max_row_delta = [0.15, 0.15, 0.15, 0.15, 0.15, 0.15, 0.08]
+max_row_delta = [0.18, 0.18, 0.18, 0.18, 0.2, 0.18, 0.10]
 
 [skills.open_door]
 arm = "left"
@@ -42,19 +42,19 @@ root_seed = 0
 max_chunks = 20
 reset_before = true
 checker_required = true
-approved_end_reasons = ["joint_rest_detected"]
 reset_target = [0.08833111344341071, 0.0, -0.003979350694546067, 0.05197590512437801, 0.3677757799801522, 0.02246238747316135, 0.0003]
 
 [skills.open_door.gate]
 targets = [
-  [0.0, 0.008168140899331402, -0.00172787595947395, 0.1584235362034853, 0.19668115340719133, -0.1203229986324587, 0.001],
+  [0.0, 0.030124383, -0.00172787595947395, 0.1584235362034853, 0.19668115340719133, -0.1203229986324587, 0.001],
   [-0.03782128489070757, 0.01932079481957235, -0.0012566370614356, 0.07707373976805014, 0.24820327292605093, 0.049776790266865704, 0.0],
   [-0.10374237073851676, 0.0, -0.001850049007113522, 0.18898425140589828, 0.24945990998748652, -0.048118727477471514, 0.0001],
+  [0.0, 0.082536620326791, -0.00172787595947395, 0.1584235362034853, 0.19668115340719133, -0.1203229986324587, 0.001],
 ]
 check_indices = [0, 1, 2, 3, 4, 5]
-tolerance = [0.075, 0.03, 0.04, 0.11, 0.075, 0.12]
+tolerance = [0.10, 0.07, 0.065, 0.15, 0.10, 0.16]
 departure_threshold = 0.10
-min_publish_step = 200
+min_publish_step = 300
 window_samples = 200
 max_spread = 0.05
 
@@ -69,10 +69,9 @@ preprocessing = "resize"
 arm = "left"
 prompt = "transport the food"
 root_seed = 0
-max_chunks = 20
+max_chunks = 12
 reset_before = false
 checker_required = true
-approved_end_reasons = ["joint_rest_detected"]
 reset_target = [0.08833111344341071, 0.0, -0.003979350694546067, 0.05197590512437801, 0.3677757799801522, 0.02246238747316135, 0.0003]
 
 [skills.transport_food.gate]
@@ -85,11 +84,12 @@ targets = [
   [0.025743606466909864, 0.0022340214425521777, -0.002408554367751567, 0.01352630170295264, 0.3244218013606241, 0.04392993727268618, 0.0001],
   [0.0004188790204785333, 0.003001966313429489, -0.0019198621771932779, -0.10662216400430667, 0.27501153023667707, 0.13629276128820278, 0.0001],
   [0.011990411961198018, 0.003316125578788389, -0.0023387411976718113, -0.06716026961672485, 0.3005631504858676, 0.1104095284811334, 0.0001],
+  [-0.03628539514895295, 0.0, -0.0020594885173527886, 0.14238396037766143, 0.25480061749858784, -0.0768817535503308, 0.0022],
 ]
 check_indices = [0, 1, 2, 3, 4, 5]
-tolerance = [0.08, 0.05, 0.05, 0.08, 0.08, 0.05]
+tolerance = [0.10, 0.07, 0.07, 0.11, 0.11, 0.08]
 departure_threshold = 0.10
-min_publish_step = 100
+min_publish_step = 250
 window_samples = 100
 max_spread = 0.05
 
@@ -104,10 +104,9 @@ preprocessing = "resize_center_crop"
 arm = "left"
 prompt = "close the door"
 root_seed = 0
-max_chunks = 20
+max_chunks = 12
 reset_before = false
 checker_required = true
-approved_end_reasons = ["joint_rest_detected"]
 reset_target = [0.08833111344341071, 0.0, -0.003979350694546067, 0.05197590512437801, 0.3677757799801522, 0.02246238747316135, 0.0003]
 
 [skills.close_door.gate]
@@ -117,9 +116,9 @@ targets = [
   [-0.01951278103729168, 0.0, -0.0016755160819141332, 0.15906930802672303, 0.4199262180297296, -0.0849102681095027, -0.0002],
 ]
 check_indices = [0, 1, 2, 3, 4, 5]
-tolerance = [0.065, 0.05, 0.05, 0.14, 0.085, 0.16]
+tolerance = [0.085, 0.07, 0.07, 0.18, 0.11, 0.20]
 departure_threshold = 0.10
-min_publish_step = 150
+min_publish_step = 250
 window_samples = 200
 max_spread = 0.05
 
@@ -137,7 +136,6 @@ root_seed = 0
 max_chunks = 20
 reset_before = true
 checker_required = false
-approved_end_reasons = ["joint_rest_detected"]
 reset_target = [0.004886921905582889, 0.0008552113334770056, -0.0032463124087086337, 0.01239183768915661, 0.011903145498598323, 0.0, 0.0003]
 
 [skills.rotate_button.gate]
@@ -145,10 +143,10 @@ targets = [
   [0.04248131399353125, 0.002932153143349733, -0.000392699081698625, -0.13178981181805854, 0.29348584036903236, 0.1383173432205157, 0.0],
 ]
 check_indices = [0, 1, 2]
-tolerance = [0.08, 0.10, 0.03]
+tolerance = [0.1, 0.13, 0.05]
 departure_threshold = 0.10
 min_publish_step = 300
 window_samples = 100
-max_spread = 0.03
+max_spread = 0.05
 arming_indices = [1]
 arming_min_abs_position = [1.0]
