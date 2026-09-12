@@ -22,9 +22,12 @@ var/
 *.pid
 *.sock
 
+# Local recovery copies
+backups/
+*.bak_*
+
 # Editor and operating-system files
 .idea/
 .vscode/
 .DS_Store
 Thumbs.db
-
