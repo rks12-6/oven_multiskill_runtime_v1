@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 
 from oven_runtime.edge.approval import ConsoleApprovalGate
 from oven_runtime.edge.audit import EdgeAuditStore
+from oven_runtime.edge.orchestrator import FIXED_SKILL_ORDER
 from oven_runtime.edge.profile import load_agilex_profile
 
 
@@ -19,6 +20,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="oven-edge")
     parser.add_argument("--profile", type=Path, required=True)
     parser.add_argument("--run-id", default=None)
+    parser.add_argument("--skill", choices=FIXED_SKILL_ORDER, default=None)
     parser.add_argument("--runtime-root", type=Path, default=None)
     parser.add_argument("--asset-root", type=Path, default=None)
     mode = parser.add_mutually_exclusive_group(required=True)
@@ -53,8 +55,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser=parser,
     )
     profile_path = args.profile.expanduser().resolve()
-    run_id = args.run_id or f"{datetime.now():%Y%m%d_%H%M%S}_{profile_path.stem}"
-    profile = load_agilex_profile(profile_path, run_id=run_id, runtime_root=runtime_root)
+    run_suffix = f"{profile_path.stem}_{args.skill}" if args.skill else profile_path.stem
+    run_id = args.run_id or f"{datetime.now():%Y%m%d_%H%M%S}_{run_suffix}"
+    profile = load_agilex_profile(
+        profile_path,
+        run_id=run_id,
+        runtime_root=runtime_root,
+        selected_skill=args.skill,
+    )
     if args.plan:
         print(
             json.dumps(
@@ -160,7 +168,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 chunk_rows=profile.action_chunk_rows,
                 max_absolute_value=profile.action_max_absolute_value,
             ),
-            joint_gate=online_gate,
             checker=checker,
             approval=ConsoleApprovalGate(execute_enabled=True),
             control=SshControlClient(

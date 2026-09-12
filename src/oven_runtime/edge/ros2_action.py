@@ -96,8 +96,9 @@ class RosActionExecutor(Node):
             time.sleep(transition_period)
         self._published_rows += 1
         self._last_command = first.copy()
-        if self.online_gate.reached(self._active_skill, self._published_rows):
-            return PublishResult(True, "joint_rest_detected", published_rows=1)
+        gate_result = self.online_gate.reached_result(self._active_skill, self._published_rows)
+        if gate_result is not None:
+            return PublishResult(True, "joint_rest_detected", published_rows=1, gate_result=gate_result)
 
         maximum_delta = np.asarray(self.config.max_row_delta, dtype=np.float64)
         period = 1.0 / self.config.publish_hz
@@ -108,8 +109,14 @@ class RosActionExecutor(Node):
             self._last_command = row.copy()
             self._published_rows += 1
             time.sleep(period)
-            if self.online_gate.reached(self._active_skill, self._published_rows):
-                return PublishResult(True, "joint_rest_detected", published_rows=row_index)
+            gate_result = self.online_gate.reached_result(self._active_skill, self._published_rows)
+            if gate_result is not None:
+                return PublishResult(
+                    True,
+                    "joint_rest_detected",
+                    published_rows=row_index,
+                    gate_result=gate_result,
+                )
         return PublishResult(published_rows=len(rows))
 
     def stop(self, reason: str) -> None:

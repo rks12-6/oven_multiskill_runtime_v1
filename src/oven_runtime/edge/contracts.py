@@ -15,6 +15,7 @@ class PublishResult:
     stop_requested: bool = False
     reason: str | None = None
     published_rows: int = 0
+    gate_result: GateResult | None = None
 
 
 @dataclass(frozen=True)
