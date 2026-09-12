@@ -1,6 +1,6 @@
 # Project implementation rules
 
-- Deployment targets are Linux only: Agilex Linux and Surf Linux.
+- Deployment targets are Linux only: Agilex Linux and 5090 Linux.
 - Do not add Windows runtime, deployment, path, service, socket, or signal compatibility code.
 - Prefer Linux primitives when they make safety explicit: Unix sockets, `fcntl` locks, POSIX signals,
   systemd, OpenSSH, file ownership, and mode bits.
