@@ -32,6 +32,45 @@ def _atomic_json(path: Path, value: Any) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def _inference_diagnostics(actions: Any, observation: dict[str, Any]) -> dict[str, Any]:
+    """Small numeric summary for diagnosing hold/jitter policy outputs."""
+
+    try:
+        action_array = np.asarray(actions)
+        state_array = np.asarray(observation.get("state"), dtype=np.float64)
+        if (
+            action_array.ndim != 2
+            or action_array.shape[0] == 0
+            or action_array.shape[1] < 7
+            or action_array.dtype.kind not in "fiu"
+            or not np.isfinite(action_array).all()
+            or state_array.shape != (7,)
+            or not np.isfinite(state_array).all()
+        ):
+            return {
+                "available": False,
+                "action_shape": list(action_array.shape),
+                "state_shape": list(state_array.shape),
+            }
+
+        local_action = np.asarray(action_array[:, :7], dtype=np.float64)
+        delta = local_action - state_array[np.newaxis, :]
+        return {
+            "available": True,
+            "observation_state": state_array.tolist(),
+            "action_shape": list(action_array.shape),
+            "local_action_first": local_action[0].tolist(),
+            "local_action_last": local_action[-1].tolist(),
+            "local_action_min": np.min(local_action, axis=0).tolist(),
+            "local_action_max": np.max(local_action, axis=0).tolist(),
+            "local_action_span": np.ptp(local_action, axis=0).tolist(),
+            "max_abs_delta_from_state": np.max(np.abs(delta), axis=0).tolist(),
+            "max_abs_delta_from_state_overall": float(np.max(np.abs(delta))),
+        }
+    except (TypeError, ValueError, OverflowError):
+        return {"available": False, "reason": "diagnostic_conversion_failed"}
+
+
 @dataclass
 class ActiveTrial:
     trial_id: str
@@ -81,12 +120,13 @@ class TrialAuditStore:
             self._active = ActiveTrial(trial_id, skill, generation, root_seed, directory)
             return self._active
 
-    def record_request(self, row: dict[str, Any], actions: Any) -> None:
+    def record_request(self, row: dict[str, Any], actions: Any, observation: dict[str, Any]) -> None:
         with self._lock:
             active = self._active
             if active is None:
                 raise fault(ErrorCode.TRIAL_REQUIRED, "no active server audit trial")
             try:
+                row["diagnostics"] = _inference_diagnostics(actions, observation)
                 action_hash = str(row["action_hash"])
                 if row.get("request_kind") == "infer" and active.first_action_hash is None:
                     action_array = np.asarray(actions)
@@ -123,7 +163,6 @@ class TrialAuditStore:
                 active.first_action_hash = action_hash
             if row.get("request_kind") == "infer":
                 active.last_action_hash = action_hash
-
     def end(self) -> dict[str, Any]:
         with self._lock:
             active = self._active
