@@ -133,6 +133,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     from oven_runtime.edge.ros2_action import RosActionExecutor
     from oven_runtime.edge.tunnel import SshInferenceTunnel
     from oven_runtime.edge.validation import ActionValidator
+    from oven_runtime.v2.control import DirectControlAdapter
 
     asset_root = _root(
         args.asset_root,
@@ -146,12 +147,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         remote_port=profile.remote_inference_port,
     )
     observation: RosObservationSource | None = None
-    action_executor: RosActionExecutor | None = None
+    action_executor: DirectControlAdapter | None = None
     checker: TorchResnetChecker | None = None
     try:
         tunnel.start()
         observation = RosObservationSource(profile.ros, online_gate)
-        action_executor = RosActionExecutor(profile.ros, observation, online_gate)
+        action_executor = DirectControlAdapter(
+            RosActionExecutor(profile.ros, observation, online_gate)
+        )
         checker = TorchResnetChecker(
             asset_root=asset_root,
             specs=profile.checkers,

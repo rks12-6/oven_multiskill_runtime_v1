@@ -11,7 +11,6 @@ from oven_runtime.common.protocol import TRIAL_ID_PATTERN
 from oven_runtime.common.state import PipelineState, ensure_pipeline_transition
 from oven_runtime.edge.audit import EdgeAuditStore
 from oven_runtime.edge.contracts import (
-    ActionExecutor,
     ApprovalGate,
     ControlClient,
     InferenceTransport,
@@ -21,6 +20,7 @@ from oven_runtime.edge.contracts import (
     VisualChecker,
 )
 from oven_runtime.edge.validation import ActionValidator, ObservationValidator
+from oven_runtime.v2.control import ControlAdapter
 
 
 FIXED_SKILL_ORDER = ("open_door", "transport_food", "close_door", "rotate_button")
@@ -75,7 +75,7 @@ class PipelineOrchestrator:
         observation_source: ObservationSource,
         observation_validator: ObservationValidator,
         reset_controller: ResetController,
-        action_executor: ActionExecutor,
+        action_executor: ControlAdapter,
         action_validator: ActionValidator,
         checker: VisualChecker,
         approval: ApprovalGate,

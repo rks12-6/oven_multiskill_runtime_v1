@@ -22,6 +22,7 @@ from oven_runtime.server.audit import TrialAuditStore
 from oven_runtime.server.control_protocol import ControlDispatcher
 from oven_runtime.server.fake_backend import FakePolicyBackend
 from oven_runtime.server.runtime import PolicyRuntime
+from oven_runtime.v2.control import DirectControlAdapter
 
 
 def _arguments(command: str, values: tuple[str | int, ...]) -> dict[str, Any]:
@@ -89,10 +90,11 @@ class FakeResetController:
 
 
 class RecordingExecutor:
-    def __init__(self, *, detect_joint_rest: bool = True) -> None:
+    def __init__(self, *, detect_joint_rest: bool = True, stop_without_gate: bool = False) -> None:
         self.chunks: list[np.ndarray] = []
         self.stop_reasons: list[str] = []
         self.detect_joint_rest = detect_joint_rest
+        self.stop_without_gate = stop_without_gate
 
     def preflight(self) -> None:
         return
@@ -102,6 +104,12 @@ class RecordingExecutor:
 
     def publish(self, actions: Any) -> PublishResult:
         self.chunks.append(np.asarray(actions).copy())
+        if self.stop_without_gate:
+            return PublishResult(
+                stop_requested=True,
+                reason="injected_stop_without_gate",
+                published_rows=len(actions),
+            )
         if self.detect_joint_rest:
             return PublishResult(
                 stop_requested=True,
@@ -144,6 +152,7 @@ class PipelineHarness:
         *,
         failed_checker_skill: str | None = None,
         detect_joint_rest: bool = True,
+        stop_without_gate: bool = False,
     ) -> None:
         self.backend = FakePolicyBackend(action_shape=(50, 14))
         self.runtime = PolicyRuntime(
@@ -152,7 +161,11 @@ class PipelineHarness:
         )
         self.observation = FakeObservationSource()
         self.reset = FakeResetController()
-        self.executor = RecordingExecutor(detect_joint_rest=detect_joint_rest)
+        self.executor = RecordingExecutor(
+            detect_joint_rest=detect_joint_rest,
+            stop_without_gate=stop_without_gate,
+        )
+        self.action_executor = DirectControlAdapter(self.executor)  # type: ignore[arg-type]
         self.checker = ConfigurableChecker(failed_checker_skill)
         self.edge_audit = EdgeAuditStore(root / "edge_audit")
         gate = WindowedJointGate(
@@ -182,7 +195,7 @@ class PipelineHarness:
             observation_source=self.observation,
             observation_validator=ObservationValidator(max_age_ms=100),
             reset_controller=self.reset,
-            action_executor=self.executor,
+            action_executor=self.action_executor,
             action_validator=ActionValidator(action_dimension=7, chunk_rows=50, max_absolute_value=10),
             checker=self.checker,
             approval=AlwaysApprove(),
@@ -237,6 +250,14 @@ class FakePipelineTests(unittest.TestCase):
         self.assertEqual(len(harness.executor.chunks), 3)
         self.assertEqual(sum(len(chunk) for chunk in harness.executor.chunks), 150)
         self.assertEqual(harness.runtime.status()["state"], "READY")
+
+    def test_executor_stop_without_gate_evidence_is_joint_gate_failure(self) -> None:
+        harness = PipelineHarness(self.root, stop_without_gate=True)
+        with self.assertRaises(RuntimeFault) as raised:
+            harness.orchestrator.run()
+        self.assertEqual(raised.exception.code, ErrorCode.JOINT_GATE_FAILED)
+        self.assertEqual(len(harness.executor.chunks), 1)
+        self.assertTrue(harness.executor.stop_reasons[-1].startswith("safe_stop:"))
 
 
 if __name__ == "__main__":
