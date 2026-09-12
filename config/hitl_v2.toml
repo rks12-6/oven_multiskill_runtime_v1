@@ -1,0 +1,76 @@
+schema_version = 1
+
+[[arm_pairs]]
+name = "left_legacy"
+side = "left"
+execution_arm = "left_front"
+operator_arm = "left_rear"
+execution_feedback_topic = "/puppet/joint_left"
+operator_feedback_topic = "/master/joint_left"
+policy_input_topic = "/joint_left_states"
+final_command_topic = "/joint_left_states"
+hitl_enabled = false
+
+[[arm_pairs]]
+name = "right_hitl"
+side = "right"
+execution_arm = "right_front"
+operator_arm = "right_rear"
+execution_feedback_topic = "/puppet/joint_right"
+operator_feedback_topic = "/puppet/joint_right_rear"
+policy_input_topic = "/hitl/policy_joint_right_cmd"
+final_command_topic = "/joint_right_states"
+execution_status_topic = "/piper_right_ctrl_node/arm_status"
+operator_status_topic = "/piper_right_rear_ctrl_node/arm_status"
+execution_enable_service = "/hitl/right_front/enable_srv"
+operator_enable_service = "/hitl/right_rear/enable_srv"
+hitl_enabled = true
+
+[[reset_profiles]]
+name = "left_reset"
+side = "left"
+target_positions = [0.08833111344341071, 0.0, -0.003979350694546067, 0.05197590512437801, 0.3677757799801522, 0.02246238747316135, 0.0003]
+tolerance = 0.03
+duration_sec = 4.0
+verify_timeout_sec = 3.0
+settle_sec = 3.0
+
+[[reset_profiles]]
+name = "right_reset"
+side = "right"
+target_positions = [0.004886921905582889, 0.0008552113334770056, -0.0032463124087086337, 0.01239183768915661, 0.011903145498598323, 0.0, 0.0003]
+tolerance = 0.03
+duration_sec = 4.0
+verify_timeout_sec = 3.0
+settle_sec = 3.0
+
+[[skill_bindings]]
+skill_name = "open_door"
+arm_pair = "left_legacy"
+reset_profile = "left_reset"
+allow_hitl = false
+
+[[skill_bindings]]
+skill_name = "transport_food"
+arm_pair = "left_legacy"
+reset_profile = "left_reset"
+allow_hitl = false
+
+[[skill_bindings]]
+skill_name = "close_door"
+arm_pair = "left_legacy"
+reset_profile = "left_reset"
+allow_hitl = false
+
+[[skill_bindings]]
+skill_name = "rotate_button"
+arm_pair = "right_hitl"
+reset_profile = "right_reset"
+allow_hitl = true
+
+[episode]
+reset_before = true
+allow_takeover = true
+same_episode_resume = false
+capture_correction = true
+reset_after_correction = true

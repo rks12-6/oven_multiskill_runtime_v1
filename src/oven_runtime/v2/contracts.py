@@ -1,0 +1,56 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class ArmPairProfile:
+    """Hardware/control-topic overlay for one execution/operator arm pair."""
+
+    name: str
+    side: str
+    execution_arm: str
+    operator_arm: str | None
+    execution_feedback_topic: str
+    operator_feedback_topic: str | None
+    policy_input_topic: str
+    final_command_topic: str
+    execution_status_topic: str | None
+    operator_status_topic: str | None
+    execution_enable_service: str | None
+    operator_enable_service: str | None
+    hitl_enabled: bool
+
+
+@dataclass(frozen=True)
+class ResetProfile:
+    """Declarative reset target only; this contract sends no commands."""
+
+    name: str
+    side: str
+    target_positions: tuple[float, ...]
+    tolerance: float
+    duration_sec: float
+    verify_timeout_sec: float
+    settle_sec: float
+
+
+@dataclass(frozen=True)
+class HitlSkillBinding:
+    """Maps an existing mature skill name to v2 hardware/reset capabilities."""
+
+    skill_name: str
+    arm_pair: str
+    reset_profile: str
+    allow_hitl: bool
+
+
+@dataclass(frozen=True)
+class EpisodeConfig:
+    """Episode-level HITL policy. same_episode_resume is intentionally unsupported in MVP."""
+
+    reset_before: bool
+    allow_takeover: bool
+    same_episode_resume: bool
+    capture_correction: bool
+    reset_after_correction: bool
