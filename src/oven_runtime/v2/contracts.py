@@ -19,6 +19,11 @@ class ArmPairProfile:
     operator_status_topic: str | None
     execution_enable_service: str | None
     operator_enable_service: str | None
+    hitl_state_topic: str | None
+    policy_enable_service: str | None
+    reset_service: str | None
+    policy_state_timeout_sec: float | None
+    reset_state_timeout_sec: float | None
     hitl_enabled: bool
 
 

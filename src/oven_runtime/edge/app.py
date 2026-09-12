@@ -14,6 +14,7 @@ from oven_runtime.edge.approval import ConsoleApprovalGate
 from oven_runtime.edge.audit import EdgeAuditStore
 from oven_runtime.edge.orchestrator import FIXED_SKILL_ORDER
 from oven_runtime.edge.profile import load_agilex_profile
+from oven_runtime.v2.profile import load_hitl_v2_profile
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -23,6 +24,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--skill", choices=FIXED_SKILL_ORDER, default=None)
     parser.add_argument("--runtime-root", type=Path, default=None)
     parser.add_argument("--asset-root", type=Path, default=None)
+    parser.add_argument("--hitl-v2-profile", type=Path, default=None)
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--plan", action="store_true")
     mode.add_argument("--observe-once", action="store_true")
@@ -63,6 +65,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         runtime_root=runtime_root,
         selected_skill=args.skill,
     )
+    hitl_profile = None
+    control_mode = None
+    if args.hitl_v2_profile is not None:
+        hitl_profile = load_hitl_v2_profile(args.hitl_v2_profile.expanduser().resolve())
+        from oven_runtime.v2.hitl_control import control_mode_for_skills
+
+        control_mode = control_mode_for_skills(
+            hitl_profile, (stage.skill for stage in profile.plan.stages)
+        )
     if args.plan:
         print(
             json.dumps(
@@ -133,7 +144,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     from oven_runtime.edge.ros2_action import RosActionExecutor
     from oven_runtime.edge.tunnel import SshInferenceTunnel
     from oven_runtime.edge.validation import ActionValidator
-    from oven_runtime.v2.control import DirectControlAdapter
+    from oven_runtime.v2.control import ControlAdapter, DirectControlAdapter
+    from oven_runtime.v2.hitl_control import ControlMode, RightHitlControlAdapter
 
     asset_root = _root(
         args.asset_root,
@@ -147,14 +159,29 @@ def main(argv: Sequence[str] | None = None) -> int:
         remote_port=profile.remote_inference_port,
     )
     observation: RosObservationSource | None = None
-    action_executor: DirectControlAdapter | None = None
+    action_executor: ControlAdapter | None = None
     checker: TorchResnetChecker | None = None
     try:
         tunnel.start()
         observation = RosObservationSource(profile.ros, online_gate)
-        action_executor = DirectControlAdapter(
-            RosActionExecutor(profile.ros, observation, online_gate)
-        )
+        if control_mode is None or control_mode is ControlMode.DIRECT:
+            action_executor = DirectControlAdapter(RosActionExecutor(profile.ros, observation, online_gate))
+        else:
+            from oven_runtime.v2.hitl_ros import RosHitlTransport
+
+            assert hitl_profile is not None
+            stage = profile.plan.stages[0]
+            arm_pair = hitl_profile.arm_pair(hitl_profile.binding(stage.skill).arm_pair)
+            assert arm_pair.policy_state_timeout_sec is not None
+            assert arm_pair.reset_state_timeout_sec is not None
+            action_executor = RightHitlControlAdapter(
+                profile.ros,
+                observation,
+                online_gate,
+                RosHitlTransport(arm_pair),
+                policy_state_timeout_sec=arm_pair.policy_state_timeout_sec,
+                reset_state_timeout_sec=arm_pair.reset_state_timeout_sec,
+            )
         checker = TorchResnetChecker(
             asset_root=asset_root,
             specs=profile.checkers,

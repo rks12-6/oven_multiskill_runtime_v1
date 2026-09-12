@@ -71,6 +71,11 @@ def _arm_pair(value: Mapping[str, Any]) -> ArmPairProfile:
         operator_status_topic=_optional_string(value, "operator_status_topic"),
         execution_enable_service=_optional_string(value, "execution_enable_service"),
         operator_enable_service=_optional_string(value, "operator_enable_service"),
+        hitl_state_topic=_optional_string(value, "hitl_state_topic"),
+        policy_enable_service=_optional_string(value, "policy_enable_service"),
+        reset_service=_optional_string(value, "reset_service"),
+        policy_state_timeout_sec=_optional_number(value, "policy_state_timeout_sec"),
+        reset_state_timeout_sec=_optional_number(value, "reset_state_timeout_sec"),
         hitl_enabled=_boolean(value, "hitl_enabled"),
     )
 
@@ -142,6 +147,12 @@ def _number(value: Mapping[str, Any], key: str) -> float:
     if not isinstance(result, (int, float)) or isinstance(result, bool) or not math.isfinite(result):
         raise ValueError(f"profile field {key} must be a finite number")
     return float(result)
+
+
+def _optional_number(value: Mapping[str, Any], key: str) -> float | None:
+    if key not in value:
+        return None
+    return _number(value, key)
 
 
 def _number_tuple(value: Mapping[str, Any], key: str) -> tuple[float, ...]:

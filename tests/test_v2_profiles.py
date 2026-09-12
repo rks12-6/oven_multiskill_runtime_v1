@@ -37,6 +37,9 @@ class HitlV2ProfileTests(unittest.TestCase):
         self.assertEqual(right.final_command_topic, "/joint_right_states")
         self.assertEqual(right.execution_enable_service, "/hitl/right_front/enable_srv")
         self.assertEqual(right.operator_enable_service, "/hitl/right_rear/enable_srv")
+        self.assertEqual(right.hitl_state_topic, "/hitl/state")
+        self.assertEqual(right.policy_enable_service, "/hitl/enable_policy")
+        self.assertEqual(right.reset_service, "/hitl/start_reset")
 
     def test_reset_targets_are_strictly_seven_dimensional(self) -> None:
         self.assertTrue(all(len(profile.target_positions) == 7 for profile in self.profile.reset_profiles))
@@ -59,6 +62,7 @@ class HitlV2ProfileTests(unittest.TestCase):
             replace(self.profile, bindings=(replace(rotate, arm_pair="left_legacy"),)),
             replace(self.profile, arm_pairs=(replace(right, operator_arm=None), left)),
             replace(self.profile, arm_pairs=(replace(right, policy_input_topic=""), left)),
+            replace(self.profile, arm_pairs=(replace(right, hitl_state_topic=None), left)),
             replace(self.profile, episode=replace(self.profile.episode, same_episode_resume=True)),
         )
         for invalid in cases:

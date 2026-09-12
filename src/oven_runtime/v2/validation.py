@@ -59,6 +59,22 @@ def _validate_arm_pair(profile: ArmPairProfile) -> None:
         raise ValueError(f"HITL arm pair {profile.name} requires operator_arm")
     if profile.hitl_enabled and not profile.policy_input_topic:
         raise ValueError(f"HITL arm pair {profile.name} requires policy_input_topic")
+    if profile.hitl_enabled:
+        _required_optional_topic(
+            profile.hitl_state_topic, f"HITL arm pair {profile.name}.hitl_state_topic"
+        )
+        _required_optional_topic(
+            profile.policy_enable_service, f"HITL arm pair {profile.name}.policy_enable_service"
+        )
+        _required_optional_topic(profile.reset_service, f"HITL arm pair {profile.name}.reset_service")
+        _positive_optional_number(
+            profile.policy_state_timeout_sec,
+            f"HITL arm pair {profile.name}.policy_state_timeout_sec",
+        )
+        _positive_optional_number(
+            profile.reset_state_timeout_sec,
+            f"HITL arm pair {profile.name}.reset_state_timeout_sec",
+        )
 
 
 def _validate_reset(profile: ResetProfile) -> None:
@@ -92,3 +108,14 @@ def _required_topic(value: str, field: str) -> None:
 def _optional_topic(value: str | None, field: str) -> None:
     if value is not None:
         _required_topic(value, field)
+
+
+def _required_optional_topic(value: str | None, field: str) -> None:
+    if value is None:
+        raise ValueError(f"{field} must be configured")
+    _required_topic(value, field)
+
+
+def _positive_optional_number(value: float | None, field: str) -> None:
+    if value is None or not math.isfinite(value) or value <= 0:
+        raise ValueError(f"{field} must be positive and finite")
