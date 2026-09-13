@@ -1,6 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
+
+
+class HitlControlMode(str, Enum):
+    """Explicit capability contracts for HITL-controlled execution arms."""
+
+    POLICY_ONLY = "policy_only"
+    FULL_HITL = "full_hitl"
 
 
 @dataclass(frozen=True)
@@ -25,6 +33,7 @@ class ArmPairProfile:
     policy_state_timeout_sec: float | None
     reset_state_timeout_sec: float | None
     hitl_enabled: bool
+    hitl_mode: HitlControlMode | None
 
 
 @dataclass(frozen=True)

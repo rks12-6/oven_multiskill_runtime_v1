@@ -5,6 +5,7 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 
+from oven_runtime.v2.contracts import HitlControlMode
 from oven_runtime.v2.profile import HitlV2Profile, load_hitl_v2_profile
 from oven_runtime.v2.validation import validate_profile
 
@@ -40,6 +41,14 @@ class HitlV2ProfileTests(unittest.TestCase):
         self.assertEqual(right.hitl_state_topic, "/hitl/state")
         self.assertEqual(right.policy_enable_service, "/hitl/enable_policy")
         self.assertEqual(right.reset_service, "/hitl/start_reset")
+        self.assertEqual(right.hitl_mode, HitlControlMode.FULL_HITL)
+
+    def test_policy_only_profile_has_no_operator_rear_contract(self) -> None:
+        policy_only = self.profile.arm_pair("right_policy_only")
+        self.assertEqual(policy_only.hitl_mode, HitlControlMode.POLICY_ONLY)
+        self.assertIsNone(policy_only.operator_arm)
+        self.assertIsNone(policy_only.operator_feedback_topic)
+        self.assertIsNone(policy_only.operator_status_topic)
 
     def test_reset_targets_are_strictly_seven_dimensional(self) -> None:
         self.assertTrue(all(len(profile.target_positions) == 7 for profile in self.profile.reset_profiles))
@@ -61,6 +70,7 @@ class HitlV2ProfileTests(unittest.TestCase):
             replace(self.profile, bindings=(replace(rotate, reset_profile="missing_reset"),)),
             replace(self.profile, bindings=(replace(rotate, arm_pair="left_legacy"),)),
             replace(self.profile, arm_pairs=(replace(right, operator_arm=None), left)),
+            replace(self.profile, arm_pairs=(replace(self.profile.arm_pair("right_policy_only"), operator_arm="right_rear"), left)),
             replace(self.profile, arm_pairs=(replace(right, policy_input_topic=""), left)),
             replace(self.profile, arm_pairs=(replace(right, hitl_state_topic=None), left)),
             replace(self.profile, episode=replace(self.profile.episode, same_episode_resume=True)),

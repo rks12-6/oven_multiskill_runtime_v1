@@ -3,7 +3,13 @@ from __future__ import annotations
 import math
 from collections.abc import Iterable
 
-from oven_runtime.v2.contracts import ArmPairProfile, EpisodeConfig, HitlSkillBinding, ResetProfile
+from oven_runtime.v2.contracts import (
+    ArmPairProfile,
+    EpisodeConfig,
+    HitlControlMode,
+    HitlSkillBinding,
+    ResetProfile,
+)
 
 
 def validate_profile(
@@ -55,10 +61,8 @@ def _validate_arm_pair(profile: ArmPairProfile) -> None:
     _optional_topic(profile.operator_status_topic, f"arm pair {profile.name}.operator_status_topic")
     _optional_topic(profile.execution_enable_service, f"arm pair {profile.name}.execution_enable_service")
     _optional_topic(profile.operator_enable_service, f"arm pair {profile.name}.operator_enable_service")
-    if profile.hitl_enabled and not profile.operator_arm:
-        raise ValueError(f"HITL arm pair {profile.name} requires operator_arm")
-    if profile.hitl_enabled and not profile.policy_input_topic:
-        raise ValueError(f"HITL arm pair {profile.name} requires policy_input_topic")
+    if profile.hitl_enabled != (profile.hitl_mode is not None):
+        raise ValueError(f"arm pair {profile.name} must configure hitl_enabled and hitl_mode together")
     if profile.hitl_enabled:
         _required_optional_topic(
             profile.hitl_state_topic, f"HITL arm pair {profile.name}.hitl_state_topic"
@@ -75,6 +79,30 @@ def _validate_arm_pair(profile: ArmPairProfile) -> None:
             profile.reset_state_timeout_sec,
             f"HITL arm pair {profile.name}.reset_state_timeout_sec",
         )
+        assert profile.hitl_mode is not None
+        if profile.hitl_mode is HitlControlMode.FULL_HITL:
+            _required_text(profile.operator_arm, f"full-HITL arm pair {profile.name}.operator_arm")
+            _required_optional_topic(
+                profile.operator_feedback_topic,
+                f"full-HITL arm pair {profile.name}.operator_feedback_topic",
+            )
+            _required_optional_topic(
+                profile.operator_status_topic,
+                f"full-HITL arm pair {profile.name}.operator_status_topic",
+            )
+        elif profile.hitl_mode is HitlControlMode.POLICY_ONLY:
+            if any(
+                value is not None
+                for value in (
+                    profile.operator_arm,
+                    profile.operator_feedback_topic,
+                    profile.operator_status_topic,
+                    profile.operator_enable_service,
+                )
+            ):
+                raise ValueError(
+                    f"policy-only arm pair {profile.name} must not configure an operator rear arm"
+                )
 
 
 def _validate_reset(profile: ResetProfile) -> None:

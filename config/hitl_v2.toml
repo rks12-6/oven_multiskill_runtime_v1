@@ -30,6 +30,24 @@ reset_service = "/hitl/start_reset"
 policy_state_timeout_sec = 5.0
 reset_state_timeout_sec = 15.0
 hitl_enabled = true
+hitl_mode = "full_hitl"
+
+[[arm_pairs]]
+name = "right_policy_only"
+side = "right"
+execution_arm = "right_front"
+execution_feedback_topic = "/puppet/joint_right"
+policy_input_topic = "/hitl/policy_joint_right_cmd"
+final_command_topic = "/joint_right_states"
+execution_status_topic = "/piper_right_ctrl_node/arm_status"
+execution_enable_service = "/hitl/right_front/enable_srv"
+hitl_state_topic = "/hitl/state"
+policy_enable_service = "/hitl/enable_policy"
+reset_service = "/hitl/start_reset"
+policy_state_timeout_sec = 5.0
+reset_state_timeout_sec = 15.0
+hitl_enabled = true
+hitl_mode = "policy_only"
 
 [[reset_profiles]]
 name = "left_reset"

@@ -11,7 +11,13 @@ try:
 except ModuleNotFoundError:
     import tomli as tomllib
 
-from oven_runtime.v2.contracts import ArmPairProfile, EpisodeConfig, HitlSkillBinding, ResetProfile
+from oven_runtime.v2.contracts import (
+    ArmPairProfile,
+    EpisodeConfig,
+    HitlControlMode,
+    HitlSkillBinding,
+    ResetProfile,
+)
 from oven_runtime.v2.validation import validate_profile
 
 
@@ -77,6 +83,7 @@ def _arm_pair(value: Mapping[str, Any]) -> ArmPairProfile:
         policy_state_timeout_sec=_optional_number(value, "policy_state_timeout_sec"),
         reset_state_timeout_sec=_optional_number(value, "reset_state_timeout_sec"),
         hitl_enabled=_boolean(value, "hitl_enabled"),
+        hitl_mode=_optional_hitl_mode(value),
     )
 
 
@@ -153,6 +160,16 @@ def _optional_number(value: Mapping[str, Any], key: str) -> float | None:
     if key not in value:
         return None
     return _number(value, key)
+
+
+def _optional_hitl_mode(value: Mapping[str, Any]) -> HitlControlMode | None:
+    if "hitl_mode" not in value:
+        return None
+    raw = _string(value, "hitl_mode")
+    try:
+        return HitlControlMode(raw)
+    except ValueError as error:
+        raise ValueError("hitl_mode must be policy_only or full_hitl") from error
 
 
 def _number_tuple(value: Mapping[str, Any], key: str) -> tuple[float, ...]:
