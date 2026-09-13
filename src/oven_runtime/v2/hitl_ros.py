@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import time
+from collections.abc import Callable
 from threading import Event, Lock, Thread, current_thread
 
 import numpy as np
@@ -34,6 +35,12 @@ class RosHitlTransport(Node):
             or arm_pair.other_front_command_topic is None
         ):
             raise ValueError("HITL public endpoints must be configured")
+        if (
+            arm_pair.hitl_mode is not None
+            and arm_pair.hitl_mode.value == 'full_hitl'
+            and arm_pair.physical_takeover_topic is None
+        ):
+            raise ValueError("full-HITL requires a physical takeover topic")
         super().__init__(f"oven_right_hitl_transport_{os.getpid()}")
         self._arm_pair = arm_pair
         self._state: str | None = None
@@ -50,6 +57,13 @@ class RosHitlTransport(Node):
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
         )
         self.create_subscription(String, arm_pair.hitl_state_topic, self._state_callback, state_qos)
+        if arm_pair.physical_takeover_topic is not None:
+            self.create_subscription(
+                UInt64,
+                arm_pair.physical_takeover_topic,
+                self._physical_takeover_callback,
+                10,
+            )
         self._policy_client = self.create_client(SetBool, arm_pair.policy_enable_service)
         self._policy_prime_ready_client = self.create_client(
             Trigger, arm_pair.policy_prime_ready_service
@@ -65,6 +79,14 @@ class RosHitlTransport(Node):
         self._progress_timeout_sec: float | None = None
         self._last_policy_progress_at: float | None = None
         self._lease_failure: str | None = None
+        self._physical_takeover_handler: Callable[[int], None] | None = None
+        self._physical_takeover_generation: int | None = None
+
+    def set_physical_takeover_handler(self, handler: Callable[[int], None]) -> None:
+        """Register the v2 owner cleanup for a generation-scoped Teach event."""
+
+        with self._lease_lock:
+            self._physical_takeover_handler = handler
 
     def preflight(self) -> None:
         self._require_open()
@@ -123,6 +145,7 @@ class RosHitlTransport(Node):
             self._progress_timeout_sec = progress_timeout_sec
             self._last_policy_progress_at = time.monotonic()
             self._lease_failure = None
+            self._physical_takeover_generation = None
         try:
             self._publish_policy_lease(generation)
         except Exception:
@@ -141,6 +164,7 @@ class RosHitlTransport(Node):
             self._lease_interval_sec = None
             self._progress_timeout_sec = None
             self._last_policy_progress_at = None
+            self._physical_takeover_generation = None
             self._lease_stop.set()
             thread = self._lease_thread
         if thread is not None and thread is not current_thread():
@@ -234,11 +258,29 @@ class RosHitlTransport(Node):
         self.destroy_node()
 
     def _policy_lease_loop(self) -> None:
+        next_lease_at = time.monotonic()
         while True:
             with self._lease_lock:
                 interval_sec = self._lease_interval_sec
-            if interval_sec is None or self._lease_stop.wait(interval_sec):
+            if interval_sec is None:
                 return
+            # The rollout thread can be blocked in inference or in a chunk.
+            # Poll subscriptions here so physical Teach still reaches the
+            # cancellation owner without waiting for the next inference result.
+            wait_sec = min(0.01, max(0.0, next_lease_at - time.monotonic()))
+            if self._lease_stop.wait(wait_sec):
+                return
+            try:
+                rclpy.spin_once(self, timeout_sec=0.0)
+            except Exception as error:
+                with self._lease_lock:
+                    self._lease_failure = f"physical takeover polling failed: {type(error).__name__}"
+                    self._lease_generation = None
+                return
+            if self._dispatch_physical_takeover():
+                return
+            if time.monotonic() < next_lease_at:
+                continue
             with self._lease_lock:
                 generation = self._lease_generation
                 progress_timeout_sec = self._progress_timeout_sec
@@ -260,6 +302,37 @@ class RosHitlTransport(Node):
                     self._lease_failure = f"lease publisher failed: {type(error).__name__}"
                     self._lease_generation = None
                 return
+            next_lease_at = time.monotonic() + interval_sec
+
+    def _physical_takeover_callback(self, message: UInt64) -> None:
+        """Record only; cleanup runs outside the ROS subscription callback."""
+
+        with self._lease_lock:
+            self._physical_takeover_generation = int(message.data)
+
+    def _dispatch_physical_takeover(self) -> bool:
+        """Run matching physical takeover cleanup in the lease worker context."""
+
+        with self._lease_lock:
+            generation = self._physical_takeover_generation
+            self._physical_takeover_generation = None
+            active_generation = self._lease_generation
+            handler = self._physical_takeover_handler
+        if generation is None or generation != active_generation:
+            return False
+        if handler is None:
+            with self._lease_lock:
+                self._lease_failure = "physical takeover received without a v2 cancellation handler"
+                self._lease_generation = None
+            return True
+        try:
+            handler(generation)
+        except Exception as error:
+            with self._lease_lock:
+                self._lease_failure = f"physical takeover cleanup failed: {type(error).__name__}"
+                self._lease_generation = None
+            return True
+        return True
 
     def _publish_policy_lease(self, generation: int) -> None:
         message = UInt64()

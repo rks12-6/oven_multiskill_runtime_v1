@@ -48,6 +48,16 @@ class PolicyLeaseWorkerTests(unittest.TestCase):
         self.transport.stop_policy_lease()
         self.assertIsNone(self.transport._lease_thread)
 
+    def test_matching_physical_takeover_event_reaches_the_registered_owner(self) -> None:
+        received: list[int] = []
+        self.transport.set_physical_takeover_handler(received.append)
+        self.transport.start_policy_lease(7, interval_sec=0.001, progress_timeout_sec=1.0)
+        self.transport._physical_takeover_callback(type("EventMessage", (), {"data": 7})())
+        Event().wait(0.05)
+
+        self.assertEqual(received, [7])
+        self.assertEqual(self.policy_messages.messages, [])
+
 
 if __name__ == "__main__":
     unittest.main()

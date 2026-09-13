@@ -82,6 +82,7 @@ def _arm_pair(value: Mapping[str, Any]) -> ArmPairProfile:
         policy_enable_service=_optional_string(value, "policy_enable_service"),
         policy_prime_ready_service=_optional_string(value, "policy_prime_ready_service"),
         policy_lease_topic=_optional_string(value, "policy_lease_topic"),
+        physical_takeover_topic=_optional_string(value, "physical_takeover_topic"),
         reset_service=_optional_string(value, "reset_service"),
         prime_ack_timeout_sec=_optional_number(value, "prime_ack_timeout_sec"),
         policy_lease_interval_sec=_optional_number(value, "policy_lease_interval_sec"),

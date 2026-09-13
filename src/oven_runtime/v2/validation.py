@@ -121,6 +121,10 @@ def _validate_arm_pair(profile: ArmPairProfile) -> None:
                 profile.operator_status_topic,
                 f"full-HITL arm pair {profile.name}.operator_status_topic",
             )
+            _required_optional_topic(
+                profile.physical_takeover_topic,
+                f"full-HITL arm pair {profile.name}.physical_takeover_topic",
+            )
         elif profile.hitl_mode is HitlControlMode.POLICY_ONLY:
             if any(
                 value is not None

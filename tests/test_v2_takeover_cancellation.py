@@ -126,6 +126,12 @@ class RecordingTransport:
     def request_manual_takeover(self) -> None:
         self.events.append("manual_takeover")
 
+    def set_physical_takeover_handler(self, handler) -> None:
+        self._physical_takeover_handler = handler
+
+    def trigger_physical_takeover(self, generation: int) -> None:
+        self._physical_takeover_handler(generation)
+
     def close(self) -> None:
         self.events.append("transport_close")
 
@@ -258,12 +264,119 @@ class TakeoverCancellationTests(unittest.TestCase):
         finally:
             adapter.close()
 
+    def test_physical_takeover_cancels_the_active_owner_without_repeating_piper_services(self) -> None:
+        events: list[str] = []
+        execution = RecordingExecution(events)
+        transport = RecordingTransport(events)
+        adapter = RightHitlControlAdapter(
+            self.config,
+            Observation(),
+            NeverGate(),  # type: ignore[arg-type]
+            transport,  # type: ignore[arg-type]
+            prime_ack_timeout_sec=1.0,
+            policy_lease_interval_sec=0.1,
+            policy_progress_timeout_sec=5.0,
+            policy_state_timeout_sec=1.0,
+            reset_state_timeout_sec=1.0,
+            manual_takeover_enabled=True,
+            execution=execution,
+        )
+        try:
+            adapter.begin_stage("rotate_button")
+            adapter.publish(np.zeros((1, 7), dtype=np.float64))
+            old_generation = adapter.rollout_generation()
+
+            transport.trigger_physical_takeover(1)
+
+            assert events.index("lease_stop") < events.index("producer_cancel")
+            assert events.index("producer_cancel") < events.index("generation:2")
+            assert "policy_enabled:False" not in events
+            assert "manual_takeover" not in events
+            with self.assertRaises(PolicyCancelled):
+                adapter.ensure_rollout_generation(old_generation)
+            with self.assertRaisesRegex(Exception, "armed stage"):
+                adapter.publish(np.zeros((1, 7), dtype=np.float64))
+
+            # A delayed event for generation N cannot cancel a later owner.
+            adapter.begin_stage("rotate_button")
+            transport.trigger_physical_takeover(1)
+            self.assertNotIn("generation:4", events)
+        finally:
+            adapter.close()
+
+    def test_physical_takeover_cancels_a_current_chunk_at_the_next_safe_action_boundary(self) -> None:
+        entered_publish = threading.Event()
+        published: list[np.ndarray] = []
+        failures: list[BaseException] = []
+        events: list[str] = []
+        transport = RecordingTransport(events)
+        holder: dict[str, int] = {}
+
+        def publish_controlled(arm: str, command: np.ndarray, other_hold: np.ndarray) -> None:
+            del arm, other_hold
+            published.append(command.copy())
+            entered_publish.set()
+            while not core.cancellation_requested(holder["generation"]):
+                time.sleep(0.001)
+
+        core = ActionExecutionCore(
+            self.config,
+            Observation(),
+            NeverGate(),  # type: ignore[arg-type]
+            publish_controlled=publish_controlled,
+        )
+        adapter = RightHitlControlAdapter(
+            self.config,
+            Observation(),
+            NeverGate(),  # type: ignore[arg-type]
+            transport,  # type: ignore[arg-type]
+            prime_ack_timeout_sec=1.0,
+            policy_lease_interval_sec=0.1,
+            policy_progress_timeout_sec=5.0,
+            policy_state_timeout_sec=1.0,
+            reset_state_timeout_sec=1.0,
+            manual_takeover_enabled=True,
+            execution=core,
+        )
+        try:
+            adapter.begin_stage("rotate_button")
+            holder["generation"] = adapter.rollout_generation()
+            thread = threading.Thread(
+                target=lambda: self._capture_adapter_publish_failure(
+                    adapter, np.zeros((50, 7), dtype=np.float64), failures
+                )
+            )
+            thread.start()
+            self.assertTrue(entered_publish.wait(timeout=1.0))
+
+            transport.trigger_physical_takeover(1)
+            thread.join(timeout=1.0)
+
+            self.assertFalse(thread.is_alive())
+            self.assertEqual(len(published), 1)
+            self.assertEqual(len(failures), 1)
+            self.assertIsInstance(failures[0], PolicyCancelled)
+            self.assertLess(events.index("lease_stop"), events.index("generation:2"))
+            with self.assertRaises(PolicyCancelled):
+                adapter.ensure_rollout_generation(holder["generation"])
+        finally:
+            adapter.close()
+
     @staticmethod
     def _capture_publish_failure(
         core: ActionExecutionCore, actions: np.ndarray, result: list[BaseException]
     ) -> None:
         try:
             core.publish(actions)
+        except BaseException as error:
+            result.append(error)
+
+    @staticmethod
+    def _capture_adapter_publish_failure(
+        adapter: RightHitlControlAdapter, actions: np.ndarray, result: list[BaseException]
+    ) -> None:
+        try:
+            adapter.publish(actions)
         except BaseException as error:
             result.append(error)
 

@@ -29,6 +29,7 @@ hitl_state_topic = "/hitl/state"
 policy_enable_service = "/hitl/enable_policy"
 policy_prime_ready_service = "/hitl/policy_prime_ready"
 policy_lease_topic = "/hitl/policy_lease"
+physical_takeover_topic = "/hitl/physical_takeover"
 reset_service = "/hitl/start_reset"
 prime_ack_timeout_sec = 1.0
 policy_lease_interval_sec = 0.1

@@ -149,6 +149,11 @@ class RightHitlControlAdapter:
         self._policy_generation: int | None = None
         self._takeover_lock = RLock()
         self._closed = False
+        # RosHitlTransport implements this optional edge-triggered callback.
+        # Keeping it capability-based preserves the pure-Python test boundary.
+        handler_setter = getattr(self._transport, "set_physical_takeover_handler", None)
+        if handler_setter is not None:
+            handler_setter(self._on_physical_takeover)
 
     def preflight(self) -> None:
         self._require_open()
@@ -225,10 +230,7 @@ class RightHitlControlAdapter:
         with self._takeover_lock:
             if not self._policy_active:
                 raise fault(ErrorCode.STATE_REJECTED, "manual takeover requires active HITL POLICY")
-            self._transport.stop_policy_lease()
-            self._execution.cancel_active_rollout()
-            self._policy_generation = self._transport.advance_policy_generation()
-            self._policy_active = False
+            self._cancel_policy_ownership()
             self._transport.set_policy_enabled(False)
             self._transport.wait_for_state(
                 "HOLD", self._policy_state_timeout_sec, pending_states=frozenset({"POLICY"})
@@ -237,6 +239,36 @@ class RightHitlControlAdapter:
             self._transport.wait_for_state(
                 "WAIT_TEACH", self._policy_state_timeout_sec, pending_states=frozenset({"HOLD"})
             )
+
+    def _on_physical_takeover(self, generation: int) -> None:
+        """Cancel the producer after Piper has locally fenced physical Teach.
+
+        Piper publishes this only for ``POLICY -> WAIT_TEACH`` and includes the
+        active Piper generation.  The matching check makes delayed events unable
+        to cancel a newer rollout.  Unlike explicit takeover, Piper is already
+        command-silent and Teach is already active, so this path must not call
+        policy-disable or the manual-takeover service again.
+        """
+
+        if self._closed:
+            return
+        with self._takeover_lock:
+            if (
+                not self._manual_takeover_enabled
+                or not self._policy_active
+                or self._policy_generation != generation
+            ):
+                return
+            self._cancel_policy_ownership()
+
+    def _cancel_policy_ownership(self) -> None:
+        """Use the one generation-fenced cancellation sequence for both triggers."""
+
+        self._transport.stop_policy_lease()
+        self._execution.cancel_active_rollout()
+        self._policy_generation = self._transport.advance_policy_generation()
+        self._policy_active = False
+        self._policy_armed = False
 
     def close(self) -> None:
         if self._closed:
