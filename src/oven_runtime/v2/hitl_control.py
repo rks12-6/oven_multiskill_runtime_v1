@@ -31,6 +31,8 @@ class HitlTransport(Protocol):
 
     def publish_policy(self, positions: np.ndarray) -> None: ...
 
+    def publish_other_front_hold(self, positions: np.ndarray) -> None: ...
+
     def close(self) -> None: ...
 
 
@@ -171,12 +173,12 @@ class RightHitlControlAdapter:
         self._closed = True
 
     def _publish_policy_only(self, arm: str, command: np.ndarray, other_hold: np.ndarray) -> None:
-        del other_hold
         if arm != "right":
             raise ValueError("RightHitlControlAdapter cannot publish a non-right command")
         if not self._policy_active:
             raise fault(ErrorCode.STATE_REJECTED, "HITL policy publication is not active")
         self._transport.publish_policy(command)
+        self._transport.publish_other_front_hold(other_hold)
 
     def _require_open(self) -> None:
         if self._closed:

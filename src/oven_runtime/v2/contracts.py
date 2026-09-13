@@ -23,6 +23,7 @@ class ArmPairProfile:
     operator_feedback_topic: str | None
     policy_input_topic: str
     final_command_topic: str
+    other_front_command_topic: str | None
     execution_status_topic: str | None
     operator_status_topic: str | None
     execution_enable_service: str | None

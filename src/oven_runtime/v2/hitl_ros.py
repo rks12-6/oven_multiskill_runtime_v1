@@ -17,7 +17,7 @@ from oven_runtime.v2.contracts import ArmPairProfile
 
 
 class RosHitlTransport(Node):
-    """Owns only a policy-input publisher and HITL public service clients."""
+    """Owns policy input, other-front hold, and HITL public service clients."""
 
     def __init__(self, arm_pair: ArmPairProfile) -> None:
         if not rclpy.ok():
@@ -28,6 +28,7 @@ class RosHitlTransport(Node):
             arm_pair.hitl_state_topic is None
             or arm_pair.policy_enable_service is None
             or arm_pair.reset_service is None
+            or arm_pair.other_front_command_topic is None
         ):
             raise ValueError("HITL public endpoints must be configured")
         super().__init__(f"oven_right_hitl_transport_{os.getpid()}")
@@ -35,6 +36,9 @@ class RosHitlTransport(Node):
         self._state: str | None = None
         self._closed = False
         self._policy_publisher = self.create_publisher(JointState, arm_pair.policy_input_topic, 10)
+        self._other_front_hold_publisher = self.create_publisher(
+            JointState, arm_pair.other_front_command_topic, 10
+        )
         state_qos = QoSProfile(
             history=HistoryPolicy.KEEP_LAST,
             depth=1,
@@ -92,6 +96,19 @@ class RosHitlTransport(Node):
         message.name = [f"joint{index}" for index in range(7)]
         message.position = values.tolist()
         self._policy_publisher.publish(message)
+
+    def publish_other_front_hold(self, positions: np.ndarray) -> None:
+        """Publish the measured hold for the non-policy front arm only."""
+
+        self._require_open()
+        values = np.asarray(positions, dtype=np.float64)
+        if values.shape != (7,) or not np.isfinite(values).all():
+            raise ValueError("other-front hold command must be seven finite values")
+        message = JointState()
+        message.header.stamp = self.get_clock().now().to_msg()
+        message.name = [f"joint{index + 1}" for index in range(7)]
+        message.position = values.tolist()
+        self._other_front_hold_publisher.publish(message)
 
     def close(self) -> None:
         self._require_open()

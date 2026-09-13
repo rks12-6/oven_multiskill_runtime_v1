@@ -56,6 +56,10 @@ def _validate_arm_pair(profile: ArmPairProfile) -> None:
     _required_topic(profile.execution_feedback_topic, f"arm pair {profile.name}.execution_feedback_topic")
     _required_topic(profile.policy_input_topic, f"arm pair {profile.name}.policy_input_topic")
     _required_topic(profile.final_command_topic, f"arm pair {profile.name}.final_command_topic")
+    _optional_topic(
+        profile.other_front_command_topic,
+        f"arm pair {profile.name}.other_front_command_topic",
+    )
     _optional_topic(profile.operator_feedback_topic, f"arm pair {profile.name}.operator_feedback_topic")
     _optional_topic(profile.execution_status_topic, f"arm pair {profile.name}.execution_status_topic")
     _optional_topic(profile.operator_status_topic, f"arm pair {profile.name}.operator_status_topic")
@@ -64,6 +68,14 @@ def _validate_arm_pair(profile: ArmPairProfile) -> None:
     if profile.hitl_enabled != (profile.hitl_mode is not None):
         raise ValueError(f"arm pair {profile.name} must configure hitl_enabled and hitl_mode together")
     if profile.hitl_enabled:
+        _required_optional_topic(
+            profile.other_front_command_topic,
+            f"HITL arm pair {profile.name}.other_front_command_topic",
+        )
+        if profile.other_front_command_topic == profile.final_command_topic:
+            raise ValueError(
+                f"HITL arm pair {profile.name}.other_front_command_topic must not be its final command topic"
+            )
         _required_optional_topic(
             profile.hitl_state_topic, f"HITL arm pair {profile.name}.hitl_state_topic"
         )

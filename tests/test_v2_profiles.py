@@ -41,6 +41,7 @@ class HitlV2ProfileTests(unittest.TestCase):
         self.assertEqual(right.hitl_state_topic, "/hitl/state")
         self.assertEqual(right.policy_enable_service, "/hitl/enable_policy")
         self.assertEqual(right.reset_service, "/hitl/start_reset")
+        self.assertEqual(right.other_front_command_topic, "/joint_left_states")
         self.assertEqual(right.hitl_mode, HitlControlMode.FULL_HITL)
 
     def test_policy_only_profile_has_no_operator_rear_contract(self) -> None:
@@ -73,6 +74,7 @@ class HitlV2ProfileTests(unittest.TestCase):
             replace(self.profile, arm_pairs=(replace(self.profile.arm_pair("right_policy_only"), operator_arm="right_rear"), left)),
             replace(self.profile, arm_pairs=(replace(right, policy_input_topic=""), left)),
             replace(self.profile, arm_pairs=(replace(right, hitl_state_topic=None), left)),
+            replace(self.profile, arm_pairs=(replace(right, other_front_command_topic="/joint_right_states"), left)),
             replace(self.profile, episode=replace(self.profile.episode, same_episode_resume=True)),
         )
         for invalid in cases:

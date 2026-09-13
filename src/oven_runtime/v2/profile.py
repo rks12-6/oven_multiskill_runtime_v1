@@ -73,6 +73,7 @@ def _arm_pair(value: Mapping[str, Any]) -> ArmPairProfile:
         operator_feedback_topic=_optional_string(value, "operator_feedback_topic"),
         policy_input_topic=_string(value, "policy_input_topic"),
         final_command_topic=_string(value, "final_command_topic"),
+        other_front_command_topic=_optional_string(value, "other_front_command_topic"),
         execution_status_topic=_optional_string(value, "execution_status_topic"),
         operator_status_topic=_optional_string(value, "operator_status_topic"),
         execution_enable_service=_optional_string(value, "execution_enable_service"),

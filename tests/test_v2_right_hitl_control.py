@@ -54,7 +54,11 @@ class FakeHitlTransport:
     def __init__(self) -> None:
         self.calls: list[tuple[str, object | None]] = []
         self.policy_messages: list[np.ndarray] = []
-        self.created_publisher_topics = ("/hitl/policy_joint_right_cmd",)
+        self.other_front_hold_messages: list[np.ndarray] = []
+        self.created_publisher_topics = (
+            "/hitl/policy_joint_right_cmd",
+            "/joint_left_states",
+        )
         self.wait_failure: BaseException | None = None
         self.closed = False
 
@@ -77,6 +81,10 @@ class FakeHitlTransport:
     def publish_policy(self, positions: np.ndarray) -> None:
         self.calls.append(("publish_policy", None))
         self.policy_messages.append(positions.copy())
+
+    def publish_other_front_hold(self, positions: np.ndarray) -> None:
+        self.calls.append(("publish_other_front_hold", None))
+        self.other_front_hold_messages.append(positions.copy())
 
     def close(self) -> None:
         self.calls.append(("close", None))
@@ -136,17 +144,46 @@ class RightHitlControlAdapterTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             control_mode_for_skills(self.hitl_profile, ("open_door", "rotate_button"))
 
-    def test_policy_publish_uses_only_policy_transport_and_preserves_gate_result(self) -> None:
+    def test_policy_publish_preserves_other_front_hold_without_final_right_publisher(self) -> None:
         self.adapter.begin_stage("rotate_button")
         result = self.adapter.publish(np.ones((1, 7), dtype=np.float64))
 
         self.assertIs(result.gate_result, self.gate.result)
         self.assertEqual(len(self.transport.policy_messages), 1)
+        self.assertEqual(len(self.transport.other_front_hold_messages), 1)
         np.testing.assert_array_equal(self.transport.policy_messages[0], np.ones(7))
+        np.testing.assert_array_equal(self.transport.other_front_hold_messages[0], np.zeros(7))
+        self.assertIn("/joint_left_states", self.transport.created_publisher_topics)
         self.assertNotIn("/joint_right_states", self.transport.created_publisher_topics)
         self.assertNotIn(("publish_final_command", None), self.transport.calls)
         self.assertIn(("set_policy_enabled", True), self.transport.calls)
+        self.assertIn(("publish_other_front_hold", None), self.transport.calls)
         self.assertIn(("wait_for_state", ("POLICY", 5.0, frozenset({"HOLD"}))), self.transport.calls)
+
+    def test_hold_routing_uses_execution_arm_ownership_not_skill_name(self) -> None:
+        generic_transport = FakeHitlTransport()
+        generic_config = replace(
+            self.config,
+            prompts={"future_right_skill": "generic right skill"},
+            reset_targets={"future_right_skill": self.config.reset_targets["rotate_button"]},
+            skill_arms={"future_right_skill": "right"},
+        )
+        adapter = RightHitlControlAdapter(
+            generic_config,
+            self.observation,
+            self.gate,  # type: ignore[arg-type]
+            generic_transport,
+            policy_state_timeout_sec=5.0,
+            reset_state_timeout_sec=15.0,
+        )
+        try:
+            adapter.begin_stage("future_right_skill")
+            adapter.publish(np.ones((1, 7), dtype=np.float64))
+            self.assertEqual(len(generic_transport.policy_messages), 1)
+            self.assertEqual(len(generic_transport.other_front_hold_messages), 1)
+            self.assertNotIn("/joint_right_states", generic_transport.created_publisher_topics)
+        finally:
+            adapter.close()
 
     def test_policy_timeout_and_unexpected_state_fail_closed(self) -> None:
         for failure in (
