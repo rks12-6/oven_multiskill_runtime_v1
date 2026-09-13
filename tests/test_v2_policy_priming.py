@@ -44,6 +44,8 @@ class AsyncPrimeTransport:
         self.generation = 0
         self.policy_cached = False
         self.policy_enabled = False
+        self.lease_generation: int | None = None
+        self.lease_failure: str | None = None
         self.ack_queries = 0
         self.prime_messages: list[np.ndarray] = []
         self.front_commands: list[np.ndarray] = []
@@ -94,6 +96,23 @@ class AsyncPrimeTransport:
         self.policy_enabled = enabled
         self.events.append(f"enable_policy:{enabled}")
 
+    def start_policy_lease(
+        self, generation: int, *, interval_sec: float, progress_timeout_sec: float
+    ) -> None:
+        assert self.policy_enabled
+        assert generation == self.generation
+        assert interval_sec > 0 and progress_timeout_sec > 0
+        self.lease_generation = generation
+        self.events.append(f"lease_start:{generation}")
+
+    def stop_policy_lease(self) -> None:
+        self.lease_generation = None
+        self.events.append("lease_stop")
+
+    def ensure_policy_lease_healthy(self) -> None:
+        if self.lease_failure is not None:
+            raise RuntimeError(self.lease_failure)
+
     def wait_for_state(
         self, expected: str, timeout_sec: float, *, pending_states: frozenset[str]
     ) -> None:
@@ -142,6 +161,8 @@ class PolicyPrimingIntegrationTests(unittest.TestCase):
             NeverGate(),  # type: ignore[arg-type]
             transport,  # type: ignore[arg-type]
             prime_ack_timeout_sec=1.0,
+            policy_lease_interval_sec=0.1,
+            policy_progress_timeout_sec=5.0,
             policy_state_timeout_sec=1.0,
             reset_state_timeout_sec=1.0,
         )
@@ -166,6 +187,7 @@ class PolicyPrimingIntegrationTests(unittest.TestCase):
                 "prime_ack:true",
                 "enable_policy:True",
                 "state:POLICY",
+                "lease_start:1",
                 "execute_policy",
                 "other_front_hold",
                 "execute_policy",
@@ -189,13 +211,14 @@ class PolicyPrimingIntegrationTests(unittest.TestCase):
             adapter.begin_stage("rotate_button")
             adapter.publish(np.full((1, 7), 0.1, dtype=np.float64))
 
-            self.assertEqual(transport.events[2:8], [
+            self.assertEqual(transport.events[2:9], [
                 "prime_policy",
                 "prime_ack:false",
                 "prime_ack:false",
                 "subscriber_delivery",
                 "prime_ack:true",
                 "enable_policy:True",
+                "state:POLICY",
             ])
             self.assertEqual(transport.front_commands[0].tolist(), [0.1] * 7)
         finally:

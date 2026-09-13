@@ -86,10 +86,21 @@ def _validate_arm_pair(profile: ArmPairProfile) -> None:
             profile.policy_prime_ready_service,
             f"HITL arm pair {profile.name}.policy_prime_ready_service",
         )
+        _required_optional_topic(
+            profile.policy_lease_topic, f"HITL arm pair {profile.name}.policy_lease_topic"
+        )
         _required_optional_topic(profile.reset_service, f"HITL arm pair {profile.name}.reset_service")
         _positive_optional_number(
             profile.prime_ack_timeout_sec,
             f"HITL arm pair {profile.name}.prime_ack_timeout_sec",
+        )
+        _positive_optional_number(
+            profile.policy_lease_interval_sec,
+            f"HITL arm pair {profile.name}.policy_lease_interval_sec",
+        )
+        _positive_optional_number(
+            profile.policy_progress_timeout_sec,
+            f"HITL arm pair {profile.name}.policy_progress_timeout_sec",
         )
         _positive_optional_number(
             profile.policy_state_timeout_sec,

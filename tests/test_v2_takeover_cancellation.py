@@ -97,6 +97,18 @@ class RecordingTransport:
         del timeout_sec
         self.events.append("prime_ack")
 
+    def start_policy_lease(
+        self, generation: int, *, interval_sec: float, progress_timeout_sec: float
+    ) -> None:
+        del interval_sec, progress_timeout_sec
+        self.events.append(f"lease_start:{generation}")
+
+    def stop_policy_lease(self) -> None:
+        self.events.append("lease_stop")
+
+    def ensure_policy_lease_healthy(self) -> None:
+        self.events.append("lease_healthy")
+
     def wait_for_state(
         self, expected: str, timeout_sec: float, *, pending_states: frozenset[str]
     ) -> None:
@@ -201,6 +213,8 @@ class TakeoverCancellationTests(unittest.TestCase):
             NeverGate(),  # type: ignore[arg-type]
             transport,  # type: ignore[arg-type]
             prime_ack_timeout_sec=1.0,
+            policy_lease_interval_sec=0.1,
+            policy_progress_timeout_sec=5.0,
             policy_state_timeout_sec=1.0,
             reset_state_timeout_sec=1.0,
             manual_takeover_enabled=True,
@@ -213,6 +227,7 @@ class TakeoverCancellationTests(unittest.TestCase):
             adapter.request_manual_takeover()
 
             self.assertLess(events.index("producer_cancel"), events.index("generation:2"))
+            self.assertLess(events.index("lease_stop"), events.index("producer_cancel"))
             self.assertLess(events.index("generation:2"), events.index("policy_enabled:False"))
             self.assertLess(events.index("policy_enabled:False"), events.index("manual_takeover"))
             self.assertLess(events.index("manual_takeover"), events.index("wait:WAIT_TEACH"))
@@ -229,6 +244,8 @@ class TakeoverCancellationTests(unittest.TestCase):
             NeverGate(),  # type: ignore[arg-type]
             RecordingTransport(events),  # type: ignore[arg-type]
             prime_ack_timeout_sec=1.0,
+            policy_lease_interval_sec=0.1,
+            policy_progress_timeout_sec=5.0,
             policy_state_timeout_sec=1.0,
             reset_state_timeout_sec=1.0,
             manual_takeover_enabled=False,

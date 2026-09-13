@@ -31,8 +31,11 @@ class ArmPairProfile:
     hitl_state_topic: str | None
     policy_enable_service: str | None
     policy_prime_ready_service: str | None
+    policy_lease_topic: str | None
     reset_service: str | None
     prime_ack_timeout_sec: float | None
+    policy_lease_interval_sec: float | None
+    policy_progress_timeout_sec: float | None
     policy_state_timeout_sec: float | None
     reset_state_timeout_sec: float | None
     hitl_enabled: bool

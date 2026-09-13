@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from enum import Enum
+import logging
 from threading import RLock
 from typing import Any, Protocol
 
@@ -15,6 +16,9 @@ from oven_runtime.edge.contracts import PublishResult
 from oven_runtime.edge.joint_gate import OnlineJointGate
 from oven_runtime.edge.profile_types import RosBridgeConfig
 from oven_runtime.v2.profile import HitlV2Profile
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class HitlTransport(Protocol):
@@ -33,6 +37,14 @@ class HitlTransport(Protocol):
     def advance_policy_generation(self) -> int: ...
 
     def wait_for_policy_prime(self, timeout_sec: float) -> None: ...
+
+    def start_policy_lease(
+        self, generation: int, *, interval_sec: float, progress_timeout_sec: float
+    ) -> None: ...
+
+    def stop_policy_lease(self) -> None: ...
+
+    def ensure_policy_lease_healthy(self) -> None: ...
 
     def publish_policy(self, positions: np.ndarray, generation: int) -> None: ...
 
@@ -102,17 +114,27 @@ class RightHitlControlAdapter:
         transport: HitlTransport,
         *,
         prime_ack_timeout_sec: float,
+        policy_lease_interval_sec: float,
+        policy_progress_timeout_sec: float,
         policy_state_timeout_sec: float,
         reset_state_timeout_sec: float,
         manual_takeover_enabled: bool = False,
         execution: ActionExecution | None = None,
     ) -> None:
-        if min(prime_ack_timeout_sec, policy_state_timeout_sec, reset_state_timeout_sec) <= 0:
+        if min(
+            prime_ack_timeout_sec,
+            policy_lease_interval_sec,
+            policy_progress_timeout_sec,
+            policy_state_timeout_sec,
+            reset_state_timeout_sec,
+        ) <= 0:
             raise ValueError("HITL state timeouts must be positive")
         config.validate()
         self._config = config
         self._transport = transport
         self._prime_ack_timeout_sec = prime_ack_timeout_sec
+        self._policy_lease_interval_sec = policy_lease_interval_sec
+        self._policy_progress_timeout_sec = policy_progress_timeout_sec
         self._policy_state_timeout_sec = policy_state_timeout_sec
         self._reset_state_timeout_sec = reset_state_timeout_sec
         self._manual_takeover_enabled = manual_takeover_enabled
@@ -171,21 +193,28 @@ class RightHitlControlAdapter:
         self._require_open()
         if not self._policy_active:
             self._prime_and_enable_policy(actions)
-        return self._execution.publish(actions)
+        self._transport.ensure_policy_lease_healthy()
+        result = self._execution.publish(actions)
+        self._transport.ensure_policy_lease_healthy()
+        return result
 
     def stop(self, reason: str) -> None:
         self._require_open()
+        del reason
+        was_policy_active = self._policy_active
+        was_policy_armed = self._policy_armed
+        self._policy_active = False
+        self._policy_armed = False
+        self._transport.stop_policy_lease()
         self._execution.deactivate()
-        if not self._policy_active and not self._policy_armed:
+        if not was_policy_active and not was_policy_armed:
             return
         self._policy_generation = self._transport.advance_policy_generation()
-        if self._policy_active:
+        if was_policy_active:
             self._transport.set_policy_enabled(False)
             self._transport.wait_for_state(
                 "HOLD", self._policy_state_timeout_sec, pending_states=frozenset({"POLICY"})
             )
-        self._policy_active = False
-        self._policy_armed = False
 
     def request_manual_takeover(self) -> None:
         """Cancel policy production before the arbiter is allowed to enter WAIT_TEACH."""
@@ -196,6 +225,7 @@ class RightHitlControlAdapter:
         with self._takeover_lock:
             if not self._policy_active:
                 raise fault(ErrorCode.STATE_REJECTED, "manual takeover requires active HITL POLICY")
+            self._transport.stop_policy_lease()
             self._execution.cancel_active_rollout()
             self._policy_generation = self._transport.advance_policy_generation()
             self._policy_active = False
@@ -211,11 +241,25 @@ class RightHitlControlAdapter:
     def close(self) -> None:
         if self._closed:
             return
-        if self._policy_active or self._policy_armed:
-            self.stop("close")
-        self._execution.close()
-        self._transport.close()
-        self._closed = True
+        try:
+            if self._policy_active or self._policy_armed:
+                self.stop("close")
+        except Exception as error:
+            _LOGGER.warning("HITL close cleanup failed while stopping policy: %s", error)
+        finally:
+            try:
+                self._transport.stop_policy_lease()
+            except Exception as error:
+                _LOGGER.warning("HITL close cleanup failed while stopping lease: %s", error)
+            try:
+                self._execution.close()
+            except Exception as error:
+                _LOGGER.warning("HITL close cleanup failed while closing execution: %s", error)
+            try:
+                self._transport.close()
+            except Exception as error:
+                _LOGGER.warning("HITL close cleanup failed while closing transport: %s", error)
+            self._closed = True
 
     def _publish_policy_only(self, arm: str, command: np.ndarray, other_hold: np.ndarray) -> None:
         if arm != "right":
@@ -245,9 +289,18 @@ class RightHitlControlAdapter:
             self._transport.wait_for_state(
                 "POLICY", self._policy_state_timeout_sec, pending_states=frozenset({"HOLD"})
             )
+            self._transport.start_policy_lease(
+                self._policy_generation,
+                interval_sec=self._policy_lease_interval_sec,
+                progress_timeout_sec=self._policy_progress_timeout_sec,
+            )
         except Exception:
             # An ACK is read-only; an error here leaves POLICY ownership unavailable.
             # A best-effort explicit disable also covers an uncertain service response.
+            try:
+                self._transport.stop_policy_lease()
+            except Exception:
+                pass
             try:
                 self._transport.set_policy_enabled(False)
             except Exception:

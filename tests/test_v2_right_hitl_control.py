@@ -8,6 +8,7 @@ from typing import Any
 
 import numpy as np
 
+from oven_runtime.common.errors import ErrorCode, RuntimeFault, fault
 from oven_runtime.edge.contracts import GateResult, PublishResult
 from oven_runtime.edge.profile import load_agilex_profile
 from oven_runtime.v2.hitl_control import (
@@ -62,6 +63,8 @@ class FakeHitlTransport:
             "/joint_left_states",
         )
         self.wait_failure: BaseException | None = None
+        self.lease_failure: BaseException | None = None
+        self.disable_failure: BaseException | None = None
         self.closed = False
         self.generation = 0
 
@@ -71,6 +74,8 @@ class FakeHitlTransport:
     def set_policy_enabled(self, enabled: bool) -> None:
         if enabled and not self.policy_cached:
             raise RuntimeError("POLICY rejected: policy has not been received")
+        if not enabled and self.disable_failure is not None:
+            raise self.disable_failure
         self.calls.append(("set_policy_enabled", enabled))
 
     def start_reset(self) -> None:
@@ -86,6 +91,19 @@ class FakeHitlTransport:
         self.calls.append(("wait_for_policy_prime", timeout_sec))
         if not self.policy_cached:
             raise TimeoutError("policy prime acknowledgement timeout")
+
+    def start_policy_lease(
+        self, generation: int, *, interval_sec: float, progress_timeout_sec: float
+    ) -> None:
+        self.calls.append(("start_policy_lease", (generation, interval_sec, progress_timeout_sec)))
+
+    def stop_policy_lease(self) -> None:
+        self.calls.append(("stop_policy_lease", None))
+
+    def ensure_policy_lease_healthy(self) -> None:
+        self.calls.append(("ensure_policy_lease_healthy", None))
+        if self.lease_failure is not None:
+            raise self.lease_failure
 
     def wait_for_state(
         self, expected: str, timeout_sec: float, *, pending_states: frozenset[str]
@@ -139,6 +157,8 @@ class RightHitlControlAdapterTests(unittest.TestCase):
             self.gate,  # type: ignore[arg-type]
             self.transport,
             prime_ack_timeout_sec=right.prime_ack_timeout_sec,
+            policy_lease_interval_sec=right.policy_lease_interval_sec or 0.1,
+            policy_progress_timeout_sec=right.policy_progress_timeout_sec or 5.0,
             policy_state_timeout_sec=right.policy_state_timeout_sec,
             reset_state_timeout_sec=right.reset_state_timeout_sec,
         )
@@ -182,6 +202,7 @@ class RightHitlControlAdapterTests(unittest.TestCase):
         self.assertNotIn("/joint_right_states", self.transport.created_publisher_topics)
         self.assertNotIn(("publish_final_command", None), self.transport.calls)
         self.assertIn(("set_policy_enabled", True), self.transport.calls)
+        self.assertIn(("start_policy_lease", (1, 0.1, 5.0)), self.transport.calls)
         self.assertLess(
             self.transport.calls.index(("publish_policy", 1)),
             self.transport.calls.index(("wait_for_policy_prime", 1.0)),
@@ -207,6 +228,8 @@ class RightHitlControlAdapterTests(unittest.TestCase):
             self.gate,  # type: ignore[arg-type]
             generic_transport,
             prime_ack_timeout_sec=1.0,
+            policy_lease_interval_sec=0.1,
+            policy_progress_timeout_sec=5.0,
             policy_state_timeout_sec=5.0,
             reset_state_timeout_sec=15.0,
         )
@@ -256,6 +279,7 @@ class RightHitlControlAdapterTests(unittest.TestCase):
         self.adapter.begin_stage("rotate_button")
         self.adapter.publish(np.ones((1, 7), dtype=np.float64))
         self.adapter.stop("rollout_complete")
+        self.assertIn(("stop_policy_lease", None), self.transport.calls)
         self.assertIn(("set_policy_enabled", False), self.transport.calls)
         with self.assertRaisesRegex(Exception, "armed stage"):
             self.adapter.publish(np.ones((1, 7), dtype=np.float64))
@@ -267,6 +291,21 @@ class RightHitlControlAdapterTests(unittest.TestCase):
         self.assertTrue(self.transport.closed)
         self.assertIn(("set_policy_enabled", False), self.transport.calls)
         self.assertIn(("close", None), self.transport.calls)
+
+    def test_close_preserves_primary_failure_when_faulted_piper_rejects_disable(self) -> None:
+        self.adapter.begin_stage("rotate_button")
+        self.adapter.publish(np.ones((1, 7), dtype=np.float64))
+        self.transport.disable_failure = RuntimeError("cannot disable policy from FAULT")
+        primary = fault(ErrorCode.INFERENCE_TIMEOUT, "primary inference failure")
+
+        with self.assertRaisesRegex(RuntimeFault, "primary inference failure"):
+            try:
+                raise primary
+            finally:
+                self.adapter.close()
+
+        self.assertTrue(self.transport.closed)
+        self.assertIn(("stop_policy_lease", None), self.transport.calls)
 
 
 if __name__ == "__main__":

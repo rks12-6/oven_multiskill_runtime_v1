@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import os
 import time
+from threading import Event, Lock, Thread, current_thread
 
 import numpy as np
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import JointState
-from std_msgs.msg import String
+from std_msgs.msg import String, UInt64
 from std_srvs.srv import SetBool, Trigger
 
 from oven_runtime.v2.contracts import ArmPairProfile
@@ -28,6 +29,7 @@ class RosHitlTransport(Node):
             arm_pair.hitl_state_topic is None
             or arm_pair.policy_enable_service is None
             or arm_pair.policy_prime_ready_service is None
+            or arm_pair.policy_lease_topic is None
             or arm_pair.reset_service is None
             or arm_pair.other_front_command_topic is None
         ):
@@ -37,6 +39,7 @@ class RosHitlTransport(Node):
         self._state: str | None = None
         self._closed = False
         self._policy_publisher = self.create_publisher(JointState, arm_pair.policy_input_topic, 10)
+        self._policy_lease_publisher = self.create_publisher(UInt64, arm_pair.policy_lease_topic, 10)
         self._other_front_hold_publisher = self.create_publisher(
             JointState, arm_pair.other_front_command_topic, 10
         )
@@ -54,6 +57,14 @@ class RosHitlTransport(Node):
         self._reset_client = self.create_client(Trigger, arm_pair.reset_service)
         self._generation_client = self.create_client(Trigger, '/hitl/advance_policy_generation')
         self._manual_takeover_client = self.create_client(SetBool, '/hitl/manual_takeover')
+        self._lease_lock = Lock()
+        self._lease_stop = Event()
+        self._lease_thread: Thread | None = None
+        self._lease_generation: int | None = None
+        self._lease_interval_sec: float | None = None
+        self._progress_timeout_sec: float | None = None
+        self._last_policy_progress_at: float | None = None
+        self._lease_failure: str | None = None
 
     def preflight(self) -> None:
         self._require_open()
@@ -94,6 +105,57 @@ class RosHitlTransport(Node):
             if response.success:
                 return
             last_reason = response.message
+
+    def start_policy_lease(
+        self, generation: int, *, interval_sec: float, progress_timeout_sec: float
+    ) -> None:
+        """Start a generation-scoped controller lease after POLICY is active."""
+
+        self._require_open()
+        if generation < 0 or interval_sec <= 0 or progress_timeout_sec <= 0:
+            raise ValueError("policy lease generation and timeouts must be positive")
+        with self._lease_lock:
+            if self._lease_thread is not None and self._lease_thread.is_alive():
+                raise RuntimeError("HITL policy lease is already active")
+            self._lease_stop.clear()
+            self._lease_generation = generation
+            self._lease_interval_sec = interval_sec
+            self._progress_timeout_sec = progress_timeout_sec
+            self._last_policy_progress_at = time.monotonic()
+            self._lease_failure = None
+        try:
+            self._publish_policy_lease(generation)
+        except Exception:
+            self.stop_policy_lease()
+            raise
+        thread = Thread(target=self._policy_lease_loop, name="hitl-policy-lease", daemon=True)
+        with self._lease_lock:
+            self._lease_thread = thread
+        thread.start()
+
+    def stop_policy_lease(self) -> None:
+        """Immediately revoke local lease publication; idempotent during cleanup."""
+
+        with self._lease_lock:
+            self._lease_generation = None
+            self._lease_interval_sec = None
+            self._progress_timeout_sec = None
+            self._last_policy_progress_at = None
+            self._lease_stop.set()
+            thread = self._lease_thread
+        if thread is not None and thread is not current_thread():
+            thread.join(timeout=1.0)
+        with self._lease_lock:
+            if self._lease_thread is thread and (thread is None or not thread.is_alive()):
+                self._lease_thread = None
+
+    def ensure_policy_lease_healthy(self) -> None:
+        """Raise in the rollout thread if a live controller exceeded progress deadline."""
+
+        with self._lease_lock:
+            failure = self._lease_failure
+        if failure is not None:
+            raise RuntimeError(f"HITL policy lease failed closed: {failure}")
 
     def start_reset(self) -> None:
         response = self._call(self._reset_client, Trigger.Request(), "start_reset")
@@ -148,6 +210,9 @@ class RosHitlTransport(Node):
         message.name = [f"joint{index}" for index in range(7)]
         message.position = values.tolist()
         self._policy_publisher.publish(message)
+        with self._lease_lock:
+            if self._lease_generation == generation:
+                self._last_policy_progress_at = time.monotonic()
 
     def publish_other_front_hold(self, positions: np.ndarray) -> None:
         """Publish the measured hold for the non-policy front arm only."""
@@ -164,8 +229,42 @@ class RosHitlTransport(Node):
 
     def close(self) -> None:
         self._require_open()
+        self.stop_policy_lease()
         self._closed = True
         self.destroy_node()
+
+    def _policy_lease_loop(self) -> None:
+        while True:
+            with self._lease_lock:
+                interval_sec = self._lease_interval_sec
+            if interval_sec is None or self._lease_stop.wait(interval_sec):
+                return
+            with self._lease_lock:
+                generation = self._lease_generation
+                progress_timeout_sec = self._progress_timeout_sec
+                last_progress_at = self._last_policy_progress_at
+            if generation is None or progress_timeout_sec is None or last_progress_at is None:
+                return
+            age = time.monotonic() - last_progress_at
+            if age > progress_timeout_sec:
+                with self._lease_lock:
+                    self._lease_failure = (
+                        f"policy progress stale ({age:.3f}s > {progress_timeout_sec:.3f}s)"
+                    )
+                    self._lease_generation = None
+                return
+            try:
+                self._publish_policy_lease(generation)
+            except Exception as error:
+                with self._lease_lock:
+                    self._lease_failure = f"lease publisher failed: {type(error).__name__}"
+                    self._lease_generation = None
+                return
+
+    def _publish_policy_lease(self, generation: int) -> None:
+        message = UInt64()
+        message.data = generation
+        self._policy_lease_publisher.publish(message)
 
     def _call(
         self, client: object, request: object, name: str, *, timeout_sec: float = 1.0
