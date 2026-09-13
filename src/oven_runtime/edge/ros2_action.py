@@ -51,6 +51,12 @@ class RosActionExecutor(Node):
     def begin_stage(self, skill: str) -> None:
         self._execution.begin_stage(skill)
 
+    def rollout_generation(self) -> int:
+        return self._execution.rollout_generation()
+
+    def ensure_rollout_generation(self, generation: int) -> None:
+        self._execution.ensure_rollout_generation(generation)
+
     def publish(self, actions: Any) -> PublishResult:
         return self._execution.publish(actions)
 

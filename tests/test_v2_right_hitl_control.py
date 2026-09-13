@@ -54,6 +54,7 @@ class FakeHitlTransport:
     def __init__(self) -> None:
         self.calls: list[tuple[str, object | None]] = []
         self.policy_messages: list[np.ndarray] = []
+        self.policy_generations: list[int] = []
         self.other_front_hold_messages: list[np.ndarray] = []
         self.created_publisher_topics = (
             "/hitl/policy_joint_right_cmd",
@@ -61,6 +62,7 @@ class FakeHitlTransport:
         )
         self.wait_failure: BaseException | None = None
         self.closed = False
+        self.generation = 0
 
     def preflight(self) -> None:
         self.calls.append(("preflight", None))
@@ -71,6 +73,11 @@ class FakeHitlTransport:
     def start_reset(self) -> None:
         self.calls.append(("start_reset", None))
 
+    def advance_policy_generation(self) -> int:
+        self.generation += 1
+        self.calls.append(("advance_policy_generation", self.generation))
+        return self.generation
+
     def wait_for_state(
         self, expected: str, timeout_sec: float, *, pending_states: frozenset[str]
     ) -> None:
@@ -78,13 +85,17 @@ class FakeHitlTransport:
         if self.wait_failure is not None:
             raise self.wait_failure
 
-    def publish_policy(self, positions: np.ndarray) -> None:
-        self.calls.append(("publish_policy", None))
+    def publish_policy(self, positions: np.ndarray, generation: int) -> None:
+        self.calls.append(("publish_policy", generation))
         self.policy_messages.append(positions.copy())
+        self.policy_generations.append(generation)
 
     def publish_other_front_hold(self, positions: np.ndarray) -> None:
         self.calls.append(("publish_other_front_hold", None))
         self.other_front_hold_messages.append(positions.copy())
+
+    def request_manual_takeover(self) -> None:
+        self.calls.append(("request_manual_takeover", None))
 
     def close(self) -> None:
         self.calls.append(("close", None))

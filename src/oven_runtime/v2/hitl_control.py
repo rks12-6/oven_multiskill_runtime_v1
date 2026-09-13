@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from enum import Enum
+from threading import RLock
 from typing import Any, Protocol
 
 import numpy as np
@@ -29,9 +30,13 @@ class HitlTransport(Protocol):
         self, expected: str, timeout_sec: float, *, pending_states: frozenset[str]
     ) -> None: ...
 
-    def publish_policy(self, positions: np.ndarray) -> None: ...
+    def advance_policy_generation(self) -> int: ...
+
+    def publish_policy(self, positions: np.ndarray, generation: int) -> None: ...
 
     def publish_other_front_hold(self, positions: np.ndarray) -> None: ...
+
+    def request_manual_takeover(self) -> None: ...
 
     def close(self) -> None: ...
 
@@ -44,6 +49,12 @@ class ActionExecution(Protocol):
     def publish(self, actions: Any) -> PublishResult: ...
 
     def deactivate(self) -> None: ...
+
+    def cancel_active_rollout(self) -> int: ...
+
+    def rollout_generation(self) -> int: ...
+
+    def ensure_rollout_generation(self, generation: int) -> None: ...
 
     def close(self) -> None: ...
 
@@ -90,6 +101,7 @@ class RightHitlControlAdapter:
         *,
         policy_state_timeout_sec: float,
         reset_state_timeout_sec: float,
+        manual_takeover_enabled: bool = False,
         execution: ActionExecution | None = None,
     ) -> None:
         if policy_state_timeout_sec <= 0 or reset_state_timeout_sec <= 0:
@@ -99,6 +111,7 @@ class RightHitlControlAdapter:
         self._transport = transport
         self._policy_state_timeout_sec = policy_state_timeout_sec
         self._reset_state_timeout_sec = reset_state_timeout_sec
+        self._manual_takeover_enabled = manual_takeover_enabled
         self._execution: ActionExecution = execution or ActionExecutionCore(
             config,
             observation,
@@ -106,6 +119,8 @@ class RightHitlControlAdapter:
             publish_controlled=self._publish_policy_only,
         )
         self._policy_active = False
+        self._policy_generation: int | None = None
+        self._takeover_lock = RLock()
         self._closed = False
 
     def preflight(self) -> None:
@@ -133,6 +148,7 @@ class RightHitlControlAdapter:
         if self._config.skill_arms[skill] != "right":
             raise ValueError("RightHitlControlAdapter only accepts a right-arm binding")
         self.preflight()
+        self._policy_generation = self._transport.advance_policy_generation()
         self._transport.set_policy_enabled(True)
         try:
             self._transport.wait_for_state(
@@ -146,6 +162,14 @@ class RightHitlControlAdapter:
         self._execution.begin_stage(skill)
         self._policy_active = True
 
+    def rollout_generation(self) -> int:
+        self._require_open()
+        return self._execution.rollout_generation()
+
+    def ensure_rollout_generation(self, generation: int) -> None:
+        self._require_open()
+        self._execution.ensure_rollout_generation(generation)
+
     def publish(self, actions: Any) -> PublishResult:
         self._require_open()
         if not self._policy_active:
@@ -158,10 +182,32 @@ class RightHitlControlAdapter:
         if not self._policy_active:
             return
         self._policy_active = False
+        self._policy_generation = self._transport.advance_policy_generation()
         self._transport.set_policy_enabled(False)
         self._transport.wait_for_state(
             "HOLD", self._policy_state_timeout_sec, pending_states=frozenset({"POLICY"})
         )
+
+    def request_manual_takeover(self) -> None:
+        """Cancel policy production before the arbiter is allowed to enter WAIT_TEACH."""
+
+        self._require_open()
+        if not self._manual_takeover_enabled:
+            raise fault(ErrorCode.STATE_REJECTED, "manual takeover is unavailable for this HITL mode")
+        with self._takeover_lock:
+            if not self._policy_active:
+                raise fault(ErrorCode.STATE_REJECTED, "manual takeover requires active HITL POLICY")
+            self._execution.cancel_active_rollout()
+            self._policy_generation = self._transport.advance_policy_generation()
+            self._policy_active = False
+            self._transport.set_policy_enabled(False)
+            self._transport.wait_for_state(
+                "HOLD", self._policy_state_timeout_sec, pending_states=frozenset({"POLICY"})
+            )
+            self._transport.request_manual_takeover()
+            self._transport.wait_for_state(
+                "WAIT_TEACH", self._policy_state_timeout_sec, pending_states=frozenset({"HOLD"})
+            )
 
     def close(self) -> None:
         if self._closed:
@@ -177,7 +223,9 @@ class RightHitlControlAdapter:
             raise ValueError("RightHitlControlAdapter cannot publish a non-right command")
         if not self._policy_active:
             raise fault(ErrorCode.STATE_REJECTED, "HITL policy publication is not active")
-        self._transport.publish_policy(command)
+        if self._policy_generation is None:
+            raise RuntimeError("HITL policy generation has not been prepared")
+        self._transport.publish_policy(command, self._policy_generation)
         self._transport.publish_other_front_hold(other_hold)
 
     def _require_open(self) -> None:

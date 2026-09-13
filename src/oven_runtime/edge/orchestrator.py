@@ -196,7 +196,9 @@ class PipelineOrchestrator:
     def _rollout(self, stage: StagePlan, session: dict[str, Any]) -> PublishResult:
         published_steps = 0
         for sequence in range(stage.max_chunks):
+            generation = self.action_executor.rollout_generation()
             response = self.inference.infer(self._request(session, "infer", sequence))
+            self.action_executor.ensure_rollout_generation(generation)
             if response.get("publishable") is not True:
                 raise fault(ErrorCode.ACTION_INVALID, "formal inference response is not publishable")
             actions = self.action_validator.validate(response["actions"])

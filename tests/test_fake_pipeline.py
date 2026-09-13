@@ -56,12 +56,18 @@ class DirectControlClient:
 
 
 class DirectInferenceClient:
-    def __init__(self, runtime: PolicyRuntime) -> None:
+    def __init__(self, runtime: PolicyRuntime, *, after_infer: Any = None) -> None:
         self.runtime = runtime
+        self.after_infer = after_infer
+        self.calls = 0
 
     def infer(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self.calls += 1
         request = InferenceRequest.parse(payload)
-        return validate_inference_response(request, self.runtime.infer(payload))
+        response = validate_inference_response(request, self.runtime.infer(payload))
+        if self.after_infer is not None:
+            self.after_infer()
+        return response
 
 
 class FakeObservationSource:
@@ -95,12 +101,21 @@ class RecordingExecutor:
         self.stop_reasons: list[str] = []
         self.detect_joint_rest = detect_joint_rest
         self.stop_without_gate = stop_without_gate
+        self.generation = 0
 
     def preflight(self) -> None:
         return
 
     def begin_stage(self, skill: str) -> None:
         self.active_skill = skill
+        self.generation += 1
+
+    def rollout_generation(self) -> int:
+        return self.generation
+
+    def ensure_rollout_generation(self, generation: int) -> None:
+        if generation != self.generation:
+            raise RuntimeError("stale rollout generation")
 
     def publish(self, actions: Any) -> PublishResult:
         self.chunks.append(np.asarray(actions).copy())
@@ -153,6 +168,7 @@ class PipelineHarness:
         failed_checker_skill: str | None = None,
         detect_joint_rest: bool = True,
         stop_without_gate: bool = False,
+        cancel_after_first_inference: bool = False,
     ) -> None:
         self.backend = FakePolicyBackend(action_shape=(50, 14))
         self.runtime = PolicyRuntime(
@@ -166,6 +182,14 @@ class PipelineHarness:
             stop_without_gate=stop_without_gate,
         )
         self.action_executor = DirectControlAdapter(self.executor)  # type: ignore[arg-type]
+        def cancel_generation() -> None:
+            if self.inference.calls == 1:
+                self.executor.generation += 1
+
+        self.inference = DirectInferenceClient(
+            self.runtime,
+            after_infer=cancel_generation if cancel_after_first_inference else None,
+        )
         self.checker = ConfigurableChecker(failed_checker_skill)
         self.edge_audit = EdgeAuditStore(root / "edge_audit")
         gate = WindowedJointGate(
@@ -200,7 +224,7 @@ class PipelineHarness:
             checker=self.checker,
             approval=AlwaysApprove(),
             control=DirectControlClient(self.runtime),
-            inference=DirectInferenceClient(self.runtime),
+            inference=self.inference,
             audit=self.edge_audit,
             sleep=lambda _seconds: None,
         )
@@ -257,6 +281,17 @@ class FakePipelineTests(unittest.TestCase):
             harness.orchestrator.run()
         self.assertEqual(raised.exception.code, ErrorCode.JOINT_GATE_FAILED)
         self.assertEqual(len(harness.executor.chunks), 1)
+        self.assertTrue(harness.executor.stop_reasons[-1].startswith("safe_stop:"))
+
+    def test_late_cancelled_generation_drops_response_without_next_inference_or_command(self) -> None:
+        harness = PipelineHarness(self.root, cancel_after_first_inference=True)
+
+        with self.assertRaises(RuntimeFault) as raised:
+            harness.orchestrator.run()
+
+        self.assertEqual(raised.exception.code, ErrorCode.PIPELINE_FAILED)
+        self.assertEqual(harness.inference.calls, 1)
+        self.assertEqual(harness.executor.chunks, [])
         self.assertTrue(harness.executor.stop_reasons[-1].startswith("safe_stop:"))
 
 

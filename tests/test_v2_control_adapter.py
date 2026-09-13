@@ -32,6 +32,13 @@ class RecordingExecutor:
     def begin_stage(self, skill: str) -> None:
         self._record("begin_stage", skill)
 
+    def rollout_generation(self) -> int:
+        self._record("rollout_generation")
+        return 1
+
+    def ensure_rollout_generation(self, generation: int) -> None:
+        self._record("ensure_rollout_generation", generation)
+
     def publish(self, actions: Any) -> PublishResult:
         self._record("publish", actions)
         return self.result

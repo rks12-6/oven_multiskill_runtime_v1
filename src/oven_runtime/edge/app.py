@@ -167,6 +167,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if control_mode is None or control_mode is ControlMode.DIRECT:
             action_executor = DirectControlAdapter(RosActionExecutor(profile.ros, observation, online_gate))
         else:
+            from oven_runtime.v2.contracts import HitlControlMode
             from oven_runtime.v2.hitl_ros import RosHitlTransport
 
             assert hitl_profile is not None
@@ -181,6 +182,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 RosHitlTransport(arm_pair),
                 policy_state_timeout_sec=arm_pair.policy_state_timeout_sec,
                 reset_state_timeout_sec=arm_pair.reset_state_timeout_sec,
+                manual_takeover_enabled=arm_pair.hitl_mode is HitlControlMode.FULL_HITL,
             )
         checker = TorchResnetChecker(
             asset_root=asset_root,

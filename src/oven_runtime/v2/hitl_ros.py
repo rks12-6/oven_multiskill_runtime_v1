@@ -48,12 +48,15 @@ class RosHitlTransport(Node):
         self.create_subscription(String, arm_pair.hitl_state_topic, self._state_callback, state_qos)
         self._policy_client = self.create_client(SetBool, arm_pair.policy_enable_service)
         self._reset_client = self.create_client(Trigger, arm_pair.reset_service)
+        self._generation_client = self.create_client(Trigger, '/hitl/advance_policy_generation')
+        self._manual_takeover_client = self.create_client(SetBool, '/hitl/manual_takeover')
 
     def preflight(self) -> None:
         self._require_open()
         for client, name in (
             (self._policy_client, self._arm_pair.policy_enable_service),
             (self._reset_client, self._arm_pair.reset_service),
+            (self._generation_client, '/hitl/advance_policy_generation'),
         ):
             if not client.wait_for_service(timeout_sec=1.0):
                 raise RuntimeError(f"required HITL service is unavailable: {name}")
@@ -69,6 +72,27 @@ class RosHitlTransport(Node):
         response = self._call(self._reset_client, Trigger.Request(), "start_reset")
         if not response.success:
             raise RuntimeError(f"HITL reset request rejected: {response.message}")
+
+    def advance_policy_generation(self) -> int:
+        response = self._call(self._generation_client, Trigger.Request(), 'advance_policy_generation')
+        if not response.success:
+            raise RuntimeError(f"HITL policy generation request rejected: {response.message}")
+        prefix = 'policy generation advanced to '
+        if not response.message.startswith(prefix):
+            raise RuntimeError(f"invalid HITL policy generation response: {response.message}")
+        try:
+            return int(response.message[len(prefix):])
+        except ValueError as error:
+            raise RuntimeError(f"invalid HITL policy generation response: {response.message}") from error
+
+    def request_manual_takeover(self) -> None:
+        if self._arm_pair.hitl_mode is None or self._arm_pair.hitl_mode.value != 'full_hitl':
+            raise RuntimeError('manual takeover is unavailable for policy_only HITL')
+        request = SetBool.Request()
+        request.data = True
+        response = self._call(self._manual_takeover_client, request, 'manual_takeover')
+        if not response.success:
+            raise RuntimeError(f"HITL manual takeover request rejected: {response.message}")
 
     def wait_for_state(
         self, expected: str, timeout_sec: float, *, pending_states: frozenset[str]
@@ -86,13 +110,14 @@ class RosHitlTransport(Node):
             rclpy.spin_once(self, timeout_sec=min(0.1, max(0.0, deadline - time.monotonic())))
         raise TimeoutError(f"timed out waiting for HITL state {expected}")
 
-    def publish_policy(self, positions: np.ndarray) -> None:
+    def publish_policy(self, positions: np.ndarray, generation: int) -> None:
         self._require_open()
         values = np.asarray(positions, dtype=np.float64)
         if values.shape != (7,) or not np.isfinite(values).all():
             raise ValueError("policy command must be seven finite values")
         message = JointState()
         message.header.stamp = self.get_clock().now().to_msg()
+        message.header.frame_id = f'hitl_generation:{generation}'
         message.name = [f"joint{index}" for index in range(7)]
         message.position = values.tolist()
         self._policy_publisher.publish(message)

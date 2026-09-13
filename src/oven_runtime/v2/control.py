@@ -24,6 +24,10 @@ class ControlAdapter(Protocol):
 
     def begin_stage(self, skill: str) -> None: ...
 
+    def rollout_generation(self) -> int: ...
+
+    def ensure_rollout_generation(self, generation: int) -> None: ...
+
     def publish(self, actions: Any) -> PublishResult: ...
 
     def stop(self, reason: str) -> None: ...
@@ -45,6 +49,12 @@ class DirectControlAdapter:
 
     def begin_stage(self, skill: str) -> None:
         self._executor.begin_stage(skill)
+
+    def rollout_generation(self) -> int:
+        return self._executor.rollout_generation()
+
+    def ensure_rollout_generation(self, generation: int) -> None:
+        self._executor.ensure_rollout_generation(generation)
 
     def publish(self, actions: Any) -> PublishResult:
         return self._executor.publish(actions)

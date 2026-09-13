@@ -6,6 +6,7 @@ import fcntl
 import math
 import os
 import time
+from threading import Event, RLock
 from collections.abc import Callable
 from typing import Any
 
@@ -15,6 +16,14 @@ from oven_runtime.common.errors import ErrorCode, fault
 from oven_runtime.edge.contracts import PublishResult
 from oven_runtime.edge.joint_gate import OnlineJointGate
 from oven_runtime.edge.profile_types import RosBridgeConfig
+
+
+class PolicyCancelled(RuntimeError):
+    """Raised when a takeover invalidates the active policy rollout generation."""
+
+    def __init__(self, generation: int) -> None:
+        super().__init__(f"policy rollout generation {generation} was cancelled")
+        self.generation = generation
 
 
 class ActionExecutionCore:
@@ -41,6 +50,11 @@ class ActionExecutionCore:
         self._preflight_complete = False
         self._lock_stream: Any | None = None
         self._closed = False
+        self._generation_lock = RLock()
+        self._publish_lock = RLock()
+        self._rollout_generation = 0
+        self._active_generation: int | None = None
+        self._cancellation: Event | None = None
 
     def preflight(self) -> None:
         if self._preflight_complete:
@@ -71,66 +85,112 @@ class ActionExecutionCore:
             time.sleep(0.02)
         raise fault(ErrorCode.ACTION_INVALID, f"{arm} arm did not reach its configured reset target")
 
-    def begin_stage(self, skill: str) -> None:
+    def begin_stage(self, skill: str) -> int:
         self.preflight()
-        self.online_gate.begin(skill)
-        arm = self.config.skill_arms[skill]
-        controlled, _ = self.observation.arm_snapshot(arm)
-        self._active_skill = skill
-        self._published_rows = 0
-        self._last_command = controlled
+        with self._publish_lock:
+            self.online_gate.begin(skill)
+            arm = self.config.skill_arms[skill]
+            controlled, _ = self.observation.arm_snapshot(arm)
+            with self._generation_lock:
+                self._rollout_generation += 1
+                self._active_generation = self._rollout_generation
+                self._cancellation = Event()
+                generation = self._active_generation
+            self._active_skill = skill
+            self._published_rows = 0
+            self._last_command = controlled
+            return generation
 
     def publish(self, actions: Any) -> PublishResult:
-        if not self._preflight_complete or self._active_skill is None or self._last_command is None:
-            raise fault(ErrorCode.STATE_REJECTED, "ROS action executor has no active stage")
-        rows = np.asarray(actions, dtype=np.float64)
-        arm = self.config.skill_arms[self._active_skill]
-        _, other_hold = self.observation.arm_snapshot(arm)
-        first = rows[0]
-        transition_period = 1.0 / self.config.chunk_transition_hz
-        for fraction in np.linspace(0.0, 1.0, self.config.chunk_transition_steps + 1, dtype=np.float64)[1:]:
-            command = self._last_command + fraction * (first - self._last_command)
-            self._publish(arm, command, other_hold)
-            time.sleep(transition_period)
-        self._published_rows += 1
-        self._last_command = first.copy()
-        gate_result = self.online_gate.reached_result(self._active_skill, self._published_rows)
-        if gate_result is not None:
-            return PublishResult(True, "joint_rest_detected", published_rows=1, gate_result=gate_result)
-        maximum_delta = np.asarray(self.config.max_row_delta, dtype=np.float64)
-        period = 1.0 / self.config.publish_hz
-        for row_index, row in enumerate(rows[1:], start=2):
-            if np.any(np.abs(row - self._last_command) > maximum_delta):
-                raise fault(ErrorCode.ACTION_INVALID, "adjacent policy action rows exceed ROS command delta limits")
-            self._publish(arm, row, other_hold)
-            self._last_command = row.copy()
+        with self._publish_lock:
+            if not self._preflight_complete or self._active_skill is None or self._last_command is None:
+                raise fault(ErrorCode.STATE_REJECTED, "ROS action executor has no active stage")
+            generation = self.rollout_generation()
+            self._require_active_generation(generation)
+            rows = np.asarray(actions, dtype=np.float64)
+            arm = self.config.skill_arms[self._active_skill]
+            _, other_hold = self.observation.arm_snapshot(arm)
+            first = rows[0]
+            transition_period = 1.0 / self.config.chunk_transition_hz
+            for fraction in np.linspace(0.0, 1.0, self.config.chunk_transition_steps + 1, dtype=np.float64)[1:]:
+                self._require_active_generation(generation)
+                command = self._last_command + fraction * (first - self._last_command)
+                self._publish(arm, command, other_hold)
+                time.sleep(transition_period)
+            self._require_active_generation(generation)
             self._published_rows += 1
-            time.sleep(period)
+            self._last_command = first.copy()
             gate_result = self.online_gate.reached_result(self._active_skill, self._published_rows)
             if gate_result is not None:
-                return PublishResult(True, "joint_rest_detected", published_rows=row_index, gate_result=gate_result)
-        return PublishResult(published_rows=len(rows))
+                return PublishResult(True, "joint_rest_detected", published_rows=1, gate_result=gate_result)
+            maximum_delta = np.asarray(self.config.max_row_delta, dtype=np.float64)
+            period = 1.0 / self.config.publish_hz
+            for row_index, row in enumerate(rows[1:], start=2):
+                self._require_active_generation(generation)
+                if np.any(np.abs(row - self._last_command) > maximum_delta):
+                    raise fault(ErrorCode.ACTION_INVALID, "adjacent policy action rows exceed ROS command delta limits")
+                self._publish(arm, row, other_hold)
+                self._last_command = row.copy()
+                self._published_rows += 1
+                time.sleep(period)
+                self._require_active_generation(generation)
+                gate_result = self.online_gate.reached_result(self._active_skill, self._published_rows)
+                if gate_result is not None:
+                    return PublishResult(True, "joint_rest_detected", published_rows=row_index, gate_result=gate_result)
+            return PublishResult(published_rows=len(rows))
+
+    def rollout_generation(self) -> int:
+        with self._generation_lock:
+            if self._active_generation is None:
+                raise PolicyCancelled(self._rollout_generation)
+            return self._active_generation
+
+    def ensure_rollout_generation(self, generation: int) -> None:
+        self._require_active_generation(generation)
+
+    def cancellation_requested(self, generation: int) -> bool:
+        with self._generation_lock:
+            return (
+                self._active_generation != generation
+                or self._cancellation is None
+                or self._cancellation.is_set()
+            )
+
+    def cancel_active_rollout(self) -> int:
+        """Fence the active generation after its current publish step reaches a safe boundary."""
+
+        with self._generation_lock:
+            if self._cancellation is not None:
+                self._cancellation.set()
+        with self._publish_lock:
+            with self._generation_lock:
+                self._rollout_generation += 1
+                next_generation = self._rollout_generation
+                self._active_generation = None
+                self._cancellation = None
+            self._deactivate_unlocked()
+            return next_generation
 
     def stop(self, reason: str, *, publish_hold: bool = True) -> None:
         del reason
-        if self._preflight_complete and self._has_published and publish_hold:
-            try:
-                left, right = self.observation.joint_snapshot()
-            except RuntimeError:
-                pass
-            else:
-                arm = self.config.skill_arms[self._active_skill] if self._active_skill else "left"
-                controlled, other_hold = (left, right) if arm == "left" else (right, left)
-                period = 1.0 / self.config.publish_hz
-                for _ in range(self.config.stop_hold_repetitions):
-                    self._publish(arm, controlled, other_hold)
-                    time.sleep(period)
-        self.deactivate()
+        with self._publish_lock:
+            if self._preflight_complete and self._has_published and publish_hold:
+                try:
+                    left, right = self.observation.joint_snapshot()
+                except RuntimeError:
+                    pass
+                else:
+                    arm = self.config.skill_arms[self._active_skill] if self._active_skill else "left"
+                    controlled, other_hold = (left, right) if arm == "left" else (right, left)
+                    period = 1.0 / self.config.publish_hz
+                    for _ in range(self.config.stop_hold_repetitions):
+                        self._publish(arm, controlled, other_hold)
+                        time.sleep(period)
+            self._deactivate_unlocked()
 
     def deactivate(self) -> None:
-        self._has_published = False
-        self._active_skill = None
-        self._last_command = None
+        with self._publish_lock:
+            self._deactivate_unlocked()
 
     def close(self) -> None:
         if self._closed:
@@ -144,6 +204,15 @@ class ActionExecutionCore:
     def _publish(self, arm: str, command: np.ndarray, other_hold: np.ndarray) -> None:
         self._publish_controlled(arm, command, other_hold)
         self._has_published = True
+
+    def _require_active_generation(self, generation: int) -> None:
+        if self.cancellation_requested(generation):
+            raise PolicyCancelled(generation)
+
+    def _deactivate_unlocked(self) -> None:
+        self._has_published = False
+        self._active_skill = None
+        self._last_command = None
 
     def _acquire_action_lock(self) -> None:
         if self._lock_stream is not None:
