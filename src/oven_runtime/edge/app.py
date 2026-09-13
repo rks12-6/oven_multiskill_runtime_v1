@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import secrets
 import sys
 import time
 from datetime import datetime
@@ -47,6 +48,19 @@ def _root(
     return Path(configured).expanduser().resolve()
 
 
+def _resolve_run_id(
+    requested: str | None, *, skill: str | None, now: datetime | None = None, token: str | None = None
+) -> str:
+    """Return the sole runtime run-id value used by plans, audits, and sessions."""
+
+    if requested is not None:
+        return requested
+    timestamp = now or datetime.now()
+    label = skill or "pipeline"
+    suffix = token or secrets.token_hex(3)
+    return f"{label}_{timestamp:%Y%m%d_%H%M%S}_{suffix}"
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
@@ -57,8 +71,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser=parser,
     )
     profile_path = args.profile.expanduser().resolve()
-    run_suffix = f"{profile_path.stem}_{args.skill}" if args.skill else profile_path.stem
-    run_id = args.run_id or f"{datetime.now():%Y%m%d_%H%M%S}_{run_suffix}"
+    run_id = _resolve_run_id(args.run_id, skill=args.skill)
     profile = load_agilex_profile(
         profile_path,
         run_id=run_id,

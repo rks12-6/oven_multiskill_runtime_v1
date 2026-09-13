@@ -11,7 +11,15 @@ class ConsoleApprovalGate:
     def approve_run(self, run_id: str, skills: tuple[str, ...]) -> bool:
         if not self.execute_enabled:
             return False
-        expected = f"YES RUN {run_id}"
         plan = " -> ".join(skills)
-        answer = self._read(f"Plan: {plan}\nType '{expected}' to authorize every declared reset and rollout: ")
-        return answer.strip() == expected
+        prompt = (
+            f"Plan: {plan}\n"
+            f"Run ID: {run_id}\n"
+            "Press Enter to authorize every declared reset and rollout.\n"
+            "Type anything else to cancel: "
+        )
+        try:
+            answer = self._read(prompt)
+        except (EOFError, OSError):
+            return False
+        return answer == ""
