@@ -27,6 +27,7 @@ class RosHitlTransport(Node):
         if (
             arm_pair.hitl_state_topic is None
             or arm_pair.policy_enable_service is None
+            or arm_pair.policy_prime_ready_service is None
             or arm_pair.reset_service is None
             or arm_pair.other_front_command_topic is None
         ):
@@ -47,6 +48,9 @@ class RosHitlTransport(Node):
         )
         self.create_subscription(String, arm_pair.hitl_state_topic, self._state_callback, state_qos)
         self._policy_client = self.create_client(SetBool, arm_pair.policy_enable_service)
+        self._policy_prime_ready_client = self.create_client(
+            Trigger, arm_pair.policy_prime_ready_service
+        )
         self._reset_client = self.create_client(Trigger, arm_pair.reset_service)
         self._generation_client = self.create_client(Trigger, '/hitl/advance_policy_generation')
         self._manual_takeover_client = self.create_client(SetBool, '/hitl/manual_takeover')
@@ -55,6 +59,7 @@ class RosHitlTransport(Node):
         self._require_open()
         for client, name in (
             (self._policy_client, self._arm_pair.policy_enable_service),
+            (self._policy_prime_ready_client, self._arm_pair.policy_prime_ready_service),
             (self._reset_client, self._arm_pair.reset_service),
             (self._generation_client, '/hitl/advance_policy_generation'),
         ):
@@ -67,6 +72,28 @@ class RosHitlTransport(Node):
         response = self._call(self._policy_client, request, "enable_policy")
         if not response.success:
             raise RuntimeError(f"HITL policy request rejected: {response.message}")
+
+    def wait_for_policy_prime(self, timeout_sec: float) -> None:
+        """Wait for Piper's read-only acknowledgement of the current policy cache."""
+
+        self._require_open()
+        if timeout_sec <= 0:
+            raise ValueError("policy prime acknowledgement timeout must be positive")
+        deadline = time.monotonic() + timeout_sec
+        last_reason = "policy prime acknowledgement not received"
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(f"timed out waiting for HITL policy prime: {last_reason}")
+            response = self._call(
+                self._policy_prime_ready_client,
+                Trigger.Request(),
+                "policy_prime_ready",
+                timeout_sec=remaining,
+            )
+            if response.success:
+                return
+            last_reason = response.message
 
     def start_reset(self) -> None:
         response = self._call(self._reset_client, Trigger.Request(), "start_reset")
@@ -140,10 +167,14 @@ class RosHitlTransport(Node):
         self._closed = True
         self.destroy_node()
 
-    def _call(self, client: object, request: object, name: str) -> object:
+    def _call(
+        self, client: object, request: object, name: str, *, timeout_sec: float = 1.0
+    ) -> object:
         self._require_open()
+        if timeout_sec <= 0:
+            raise TimeoutError(f"timed out calling HITL service {name}")
         future = client.call_async(request)  # type: ignore[attr-defined]
-        rclpy.spin_until_future_complete(self, future, timeout_sec=1.0)
+        rclpy.spin_until_future_complete(self, future, timeout_sec=timeout_sec)
         if not future.done():
             raise TimeoutError(f"timed out calling HITL service {name}")
         error = future.exception()

@@ -40,7 +40,9 @@ class HitlV2ProfileTests(unittest.TestCase):
         self.assertEqual(right.operator_enable_service, "/hitl/right_rear/enable_srv")
         self.assertEqual(right.hitl_state_topic, "/hitl/state")
         self.assertEqual(right.policy_enable_service, "/hitl/enable_policy")
+        self.assertEqual(right.policy_prime_ready_service, "/hitl/policy_prime_ready")
         self.assertEqual(right.reset_service, "/hitl/start_reset")
+        self.assertEqual(right.prime_ack_timeout_sec, 1.0)
         self.assertEqual(right.other_front_command_topic, "/joint_left_states")
         self.assertEqual(right.hitl_mode, HitlControlMode.FULL_HITL)
 
@@ -74,6 +76,8 @@ class HitlV2ProfileTests(unittest.TestCase):
             replace(self.profile, arm_pairs=(replace(self.profile.arm_pair("right_policy_only"), operator_arm="right_rear"), left)),
             replace(self.profile, arm_pairs=(replace(right, policy_input_topic=""), left)),
             replace(self.profile, arm_pairs=(replace(right, hitl_state_topic=None), left)),
+            replace(self.profile, arm_pairs=(replace(right, policy_prime_ready_service=None), left)),
+            replace(self.profile, arm_pairs=(replace(right, prime_ack_timeout_sec=0.0), left)),
             replace(self.profile, arm_pairs=(replace(right, other_front_command_topic="/joint_right_states"), left)),
             replace(self.profile, episode=replace(self.profile.episode, same_episode_resume=True)),
         )

@@ -52,7 +52,8 @@ class RecordingExecution:
         self.events.append(f"producer_begin:{skill}")
 
     def publish(self, actions: object):
-        raise AssertionError(f"unexpected publish: {actions}")
+        self.events.append("producer_publish")
+        return GateResult(True, 1, 0.0, 0.0, "recording")
 
     def deactivate(self) -> None:
         self.events.append("producer_deactivate")
@@ -91,6 +92,10 @@ class RecordingTransport:
         self.generation += 1
         self.events.append(f"generation:{self.generation}")
         return self.generation
+
+    def wait_for_policy_prime(self, timeout_sec: float) -> None:
+        del timeout_sec
+        self.events.append("prime_ack")
 
     def wait_for_state(
         self, expected: str, timeout_sec: float, *, pending_states: frozenset[str]
@@ -195,6 +200,7 @@ class TakeoverCancellationTests(unittest.TestCase):
             Observation(),
             NeverGate(),  # type: ignore[arg-type]
             transport,  # type: ignore[arg-type]
+            prime_ack_timeout_sec=1.0,
             policy_state_timeout_sec=1.0,
             reset_state_timeout_sec=1.0,
             manual_takeover_enabled=True,
@@ -202,6 +208,7 @@ class TakeoverCancellationTests(unittest.TestCase):
         )
         try:
             adapter.begin_stage("rotate_button")
+            adapter.publish(np.zeros((1, 7), dtype=np.float64))
             old_generation = adapter.rollout_generation()
             adapter.request_manual_takeover()
 
@@ -221,6 +228,7 @@ class TakeoverCancellationTests(unittest.TestCase):
             Observation(),
             NeverGate(),  # type: ignore[arg-type]
             RecordingTransport(events),  # type: ignore[arg-type]
+            prime_ack_timeout_sec=1.0,
             policy_state_timeout_sec=1.0,
             reset_state_timeout_sec=1.0,
             manual_takeover_enabled=False,

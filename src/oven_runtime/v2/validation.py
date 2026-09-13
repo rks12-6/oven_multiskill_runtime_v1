@@ -82,7 +82,15 @@ def _validate_arm_pair(profile: ArmPairProfile) -> None:
         _required_optional_topic(
             profile.policy_enable_service, f"HITL arm pair {profile.name}.policy_enable_service"
         )
+        _required_optional_topic(
+            profile.policy_prime_ready_service,
+            f"HITL arm pair {profile.name}.policy_prime_ready_service",
+        )
         _required_optional_topic(profile.reset_service, f"HITL arm pair {profile.name}.reset_service")
+        _positive_optional_number(
+            profile.prime_ack_timeout_sec,
+            f"HITL arm pair {profile.name}.prime_ack_timeout_sec",
+        )
         _positive_optional_number(
             profile.policy_state_timeout_sec,
             f"HITL arm pair {profile.name}.policy_state_timeout_sec",

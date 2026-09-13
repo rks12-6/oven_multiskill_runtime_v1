@@ -32,6 +32,8 @@ class HitlTransport(Protocol):
 
     def advance_policy_generation(self) -> int: ...
 
+    def wait_for_policy_prime(self, timeout_sec: float) -> None: ...
+
     def publish_policy(self, positions: np.ndarray, generation: int) -> None: ...
 
     def publish_other_front_hold(self, positions: np.ndarray) -> None: ...
@@ -99,16 +101,18 @@ class RightHitlControlAdapter:
         online_gate: OnlineJointGate,
         transport: HitlTransport,
         *,
+        prime_ack_timeout_sec: float,
         policy_state_timeout_sec: float,
         reset_state_timeout_sec: float,
         manual_takeover_enabled: bool = False,
         execution: ActionExecution | None = None,
     ) -> None:
-        if policy_state_timeout_sec <= 0 or reset_state_timeout_sec <= 0:
+        if min(prime_ack_timeout_sec, policy_state_timeout_sec, reset_state_timeout_sec) <= 0:
             raise ValueError("HITL state timeouts must be positive")
         config.validate()
         self._config = config
         self._transport = transport
+        self._prime_ack_timeout_sec = prime_ack_timeout_sec
         self._policy_state_timeout_sec = policy_state_timeout_sec
         self._reset_state_timeout_sec = reset_state_timeout_sec
         self._manual_takeover_enabled = manual_takeover_enabled
@@ -119,6 +123,7 @@ class RightHitlControlAdapter:
             publish_controlled=self._publish_policy_only,
         )
         self._policy_active = False
+        self._policy_armed = False
         self._policy_generation: int | None = None
         self._takeover_lock = RLock()
         self._closed = False
@@ -130,7 +135,7 @@ class RightHitlControlAdapter:
 
     def reset(self, skill: str) -> None:
         self._require_open()
-        if self._policy_active:
+        if self._policy_active or self._policy_armed:
             raise fault(ErrorCode.STATE_REJECTED, "cannot reset while HITL POLICY ownership is active")
         if self._config.skill_arms[skill] != "right":
             raise ValueError("RightHitlControlAdapter only accepts a right-arm binding")
@@ -147,20 +152,12 @@ class RightHitlControlAdapter:
         self._require_open()
         if self._config.skill_arms[skill] != "right":
             raise ValueError("RightHitlControlAdapter only accepts a right-arm binding")
+        if self._policy_active or self._policy_armed:
+            raise fault(ErrorCode.STATE_REJECTED, "HITL policy stage is already active or armed")
         self.preflight()
         self._policy_generation = self._transport.advance_policy_generation()
-        self._transport.set_policy_enabled(True)
-        try:
-            self._transport.wait_for_state(
-                "POLICY", self._policy_state_timeout_sec, pending_states=frozenset({"HOLD"})
-            )
-        except Exception:
-            # State observation can time out after the service reached the
-            # arbiter; revoke ownership before exposing that failure.
-            self._transport.set_policy_enabled(False)
-            raise
         self._execution.begin_stage(skill)
-        self._policy_active = True
+        self._policy_armed = True
 
     def rollout_generation(self) -> int:
         self._require_open()
@@ -173,20 +170,22 @@ class RightHitlControlAdapter:
     def publish(self, actions: Any) -> PublishResult:
         self._require_open()
         if not self._policy_active:
-            raise fault(ErrorCode.STATE_REJECTED, "HITL policy publication requires a confirmed POLICY stage")
+            self._prime_and_enable_policy(actions)
         return self._execution.publish(actions)
 
     def stop(self, reason: str) -> None:
         self._require_open()
         self._execution.deactivate()
-        if not self._policy_active:
+        if not self._policy_active and not self._policy_armed:
             return
-        self._policy_active = False
         self._policy_generation = self._transport.advance_policy_generation()
-        self._transport.set_policy_enabled(False)
-        self._transport.wait_for_state(
-            "HOLD", self._policy_state_timeout_sec, pending_states=frozenset({"POLICY"})
-        )
+        if self._policy_active:
+            self._transport.set_policy_enabled(False)
+            self._transport.wait_for_state(
+                "HOLD", self._policy_state_timeout_sec, pending_states=frozenset({"POLICY"})
+            )
+        self._policy_active = False
+        self._policy_armed = False
 
     def request_manual_takeover(self) -> None:
         """Cancel policy production before the arbiter is allowed to enter WAIT_TEACH."""
@@ -212,7 +211,7 @@ class RightHitlControlAdapter:
     def close(self) -> None:
         if self._closed:
             return
-        if self._policy_active:
+        if self._policy_active or self._policy_armed:
             self.stop("close")
         self._execution.close()
         self._transport.close()
@@ -227,6 +226,39 @@ class RightHitlControlAdapter:
             raise RuntimeError("HITL policy generation has not been prepared")
         self._transport.publish_policy(command, self._policy_generation)
         self._transport.publish_other_front_hold(other_hold)
+
+    def _prime_and_enable_policy(self, actions: Any) -> None:
+        """Prime Piper with a real row, receive its ACK, then grant POLICY ownership."""
+
+        if not self._policy_armed or self._policy_generation is None:
+            raise fault(ErrorCode.STATE_REJECTED, "HITL policy publication requires an armed stage")
+        rows = np.asarray(actions, dtype=np.float64)
+        if rows.ndim != 2 or rows.shape[0] == 0 or rows.shape[1:] != (7,) or not np.isfinite(rows).all():
+            raise fault(ErrorCode.ACTION_INVALID, "HITL policy priming requires finite seven-joint actions")
+        rollout_generation = self._execution.rollout_generation()
+        self._execution.ensure_rollout_generation(rollout_generation)
+        self._transport.publish_policy(rows[0], self._policy_generation)
+        try:
+            self._transport.wait_for_policy_prime(self._prime_ack_timeout_sec)
+            self._execution.ensure_rollout_generation(rollout_generation)
+            self._transport.set_policy_enabled(True)
+            self._transport.wait_for_state(
+                "POLICY", self._policy_state_timeout_sec, pending_states=frozenset({"HOLD"})
+            )
+        except Exception:
+            # An ACK is read-only; an error here leaves POLICY ownership unavailable.
+            # A best-effort explicit disable also covers an uncertain service response.
+            try:
+                self._transport.set_policy_enabled(False)
+            except Exception:
+                pass
+            self._execution.deactivate()
+            self._policy_generation = self._transport.advance_policy_generation()
+            self._policy_armed = False
+            self._policy_active = False
+            raise
+        self._policy_active = True
+        self._policy_armed = False
 
     def _require_open(self) -> None:
         if self._closed:

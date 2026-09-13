@@ -55,6 +55,7 @@ class FakeHitlTransport:
         self.calls: list[tuple[str, object | None]] = []
         self.policy_messages: list[np.ndarray] = []
         self.policy_generations: list[int] = []
+        self.policy_cached = False
         self.other_front_hold_messages: list[np.ndarray] = []
         self.created_publisher_topics = (
             "/hitl/policy_joint_right_cmd",
@@ -68,6 +69,8 @@ class FakeHitlTransport:
         self.calls.append(("preflight", None))
 
     def set_policy_enabled(self, enabled: bool) -> None:
+        if enabled and not self.policy_cached:
+            raise RuntimeError("POLICY rejected: policy has not been received")
         self.calls.append(("set_policy_enabled", enabled))
 
     def start_reset(self) -> None:
@@ -75,8 +78,14 @@ class FakeHitlTransport:
 
     def advance_policy_generation(self) -> int:
         self.generation += 1
+        self.policy_cached = False
         self.calls.append(("advance_policy_generation", self.generation))
         return self.generation
+
+    def wait_for_policy_prime(self, timeout_sec: float) -> None:
+        self.calls.append(("wait_for_policy_prime", timeout_sec))
+        if not self.policy_cached:
+            raise TimeoutError("policy prime acknowledgement timeout")
 
     def wait_for_state(
         self, expected: str, timeout_sec: float, *, pending_states: frozenset[str]
@@ -89,6 +98,7 @@ class FakeHitlTransport:
         self.calls.append(("publish_policy", generation))
         self.policy_messages.append(positions.copy())
         self.policy_generations.append(generation)
+        self.policy_cached = True
 
     def publish_other_front_hold(self, positions: np.ndarray) -> None:
         self.calls.append(("publish_other_front_hold", None))
@@ -120,6 +130,7 @@ class RightHitlControlAdapterTests(unittest.TestCase):
         self.gate = PassingGate()
         self.transport = FakeHitlTransport()
         right = self.hitl_profile.arm_pair("right_hitl")
+        assert right.prime_ack_timeout_sec is not None
         assert right.policy_state_timeout_sec is not None
         assert right.reset_state_timeout_sec is not None
         self.adapter = RightHitlControlAdapter(
@@ -127,6 +138,7 @@ class RightHitlControlAdapterTests(unittest.TestCase):
             self.observation,
             self.gate,  # type: ignore[arg-type]
             self.transport,
+            prime_ack_timeout_sec=right.prime_ack_timeout_sec,
             policy_state_timeout_sec=right.policy_state_timeout_sec,
             reset_state_timeout_sec=right.reset_state_timeout_sec,
         )
@@ -157,17 +169,27 @@ class RightHitlControlAdapterTests(unittest.TestCase):
 
     def test_policy_publish_preserves_other_front_hold_without_final_right_publisher(self) -> None:
         self.adapter.begin_stage("rotate_button")
+        self.assertNotIn(("set_policy_enabled", True), self.transport.calls)
         result = self.adapter.publish(np.ones((1, 7), dtype=np.float64))
 
         self.assertIs(result.gate_result, self.gate.result)
-        self.assertEqual(len(self.transport.policy_messages), 1)
+        self.assertEqual(len(self.transport.policy_messages), 2)
         self.assertEqual(len(self.transport.other_front_hold_messages), 1)
         np.testing.assert_array_equal(self.transport.policy_messages[0], np.ones(7))
+        np.testing.assert_array_equal(self.transport.policy_messages[1], np.ones(7))
         np.testing.assert_array_equal(self.transport.other_front_hold_messages[0], np.zeros(7))
         self.assertIn("/joint_left_states", self.transport.created_publisher_topics)
         self.assertNotIn("/joint_right_states", self.transport.created_publisher_topics)
         self.assertNotIn(("publish_final_command", None), self.transport.calls)
         self.assertIn(("set_policy_enabled", True), self.transport.calls)
+        self.assertLess(
+            self.transport.calls.index(("publish_policy", 1)),
+            self.transport.calls.index(("wait_for_policy_prime", 1.0)),
+        )
+        self.assertLess(
+            self.transport.calls.index(("wait_for_policy_prime", 1.0)),
+            self.transport.calls.index(("set_policy_enabled", True)),
+        )
         self.assertIn(("publish_other_front_hold", None), self.transport.calls)
         self.assertIn(("wait_for_state", ("POLICY", 5.0, frozenset({"HOLD"}))), self.transport.calls)
 
@@ -184,13 +206,14 @@ class RightHitlControlAdapterTests(unittest.TestCase):
             self.observation,
             self.gate,  # type: ignore[arg-type]
             generic_transport,
+            prime_ack_timeout_sec=1.0,
             policy_state_timeout_sec=5.0,
             reset_state_timeout_sec=15.0,
         )
         try:
             adapter.begin_stage("future_right_skill")
             adapter.publish(np.ones((1, 7), dtype=np.float64))
-            self.assertEqual(len(generic_transport.policy_messages), 1)
+            self.assertEqual(len(generic_transport.policy_messages), 2)
             self.assertEqual(len(generic_transport.other_front_hold_messages), 1)
             self.assertNotIn("/joint_right_states", generic_transport.created_publisher_topics)
         finally:
@@ -205,8 +228,9 @@ class RightHitlControlAdapterTests(unittest.TestCase):
         ):
             with self.subTest(failure=failure):
                 self.transport.wait_failure = failure
+                self.adapter.begin_stage("rotate_button")
                 with self.assertRaises(type(failure)) as raised:
-                    self.adapter.begin_stage("rotate_button")
+                    self.adapter.publish(np.ones((1, 7), dtype=np.float64))
                 self.assertIs(raised.exception, failure)
 
     def test_reset_waits_for_resetting_then_hold(self) -> None:
@@ -230,13 +254,15 @@ class RightHitlControlAdapterTests(unittest.TestCase):
 
     def test_stop_disables_policy_and_blocks_future_publication(self) -> None:
         self.adapter.begin_stage("rotate_button")
+        self.adapter.publish(np.ones((1, 7), dtype=np.float64))
         self.adapter.stop("rollout_complete")
         self.assertIn(("set_policy_enabled", False), self.transport.calls)
-        with self.assertRaisesRegex(Exception, "confirmed POLICY stage"):
+        with self.assertRaisesRegex(Exception, "armed stage"):
             self.adapter.publish(np.ones((1, 7), dtype=np.float64))
 
     def test_close_releases_only_adapter_owned_transport(self) -> None:
         self.adapter.begin_stage("rotate_button")
+        self.adapter.publish(np.ones((1, 7), dtype=np.float64))
         self.adapter.close()
         self.assertTrue(self.transport.closed)
         self.assertIn(("set_policy_enabled", False), self.transport.calls)

@@ -173,6 +173,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             assert hitl_profile is not None
             stage = profile.plan.stages[0]
             arm_pair = hitl_profile.arm_pair(hitl_profile.binding(stage.skill).arm_pair)
+            assert arm_pair.prime_ack_timeout_sec is not None
             assert arm_pair.policy_state_timeout_sec is not None
             assert arm_pair.reset_state_timeout_sec is not None
             action_executor = RightHitlControlAdapter(
@@ -180,6 +181,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 observation,
                 online_gate,
                 RosHitlTransport(arm_pair),
+                prime_ack_timeout_sec=arm_pair.prime_ack_timeout_sec,
                 policy_state_timeout_sec=arm_pair.policy_state_timeout_sec,
                 reset_state_timeout_sec=arm_pair.reset_state_timeout_sec,
                 manual_takeover_enabled=arm_pair.hitl_mode is HitlControlMode.FULL_HITL,
