@@ -31,11 +31,12 @@ policy_prime_ready_service = "/hitl/policy_prime_ready"
 policy_lease_topic = "/hitl/policy_lease"
 physical_takeover_topic = "/hitl/physical_takeover"
 reset_service = "/hitl/start_reset"
+reset_outcome_topic = "/hitl/reset_outcome"
 prime_ack_timeout_sec = 1.0
 policy_lease_interval_sec = 0.1
 policy_progress_timeout_sec = 5.0
 policy_state_timeout_sec = 5.0
-reset_state_timeout_sec = 15.0
+reset_state_timeout_sec = 45.0
 hitl_enabled = true
 hitl_mode = "full_hitl"
 
@@ -54,11 +55,12 @@ policy_enable_service = "/hitl/enable_policy"
 policy_prime_ready_service = "/hitl/policy_prime_ready"
 policy_lease_topic = "/hitl/policy_lease"
 reset_service = "/hitl/start_reset"
+reset_outcome_topic = "/hitl/reset_outcome"
 prime_ack_timeout_sec = 1.0
 policy_lease_interval_sec = 0.1
 policy_progress_timeout_sec = 5.0
 policy_state_timeout_sec = 5.0
-reset_state_timeout_sec = 15.0
+reset_state_timeout_sec = 45.0
 hitl_enabled = true
 hitl_mode = "policy_only"
 

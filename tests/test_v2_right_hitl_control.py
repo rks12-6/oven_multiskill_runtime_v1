@@ -67,6 +67,8 @@ class FakeHitlTransport:
         self.disable_failure: BaseException | None = None
         self.closed = False
         self.generation = 0
+        self.reset_attempt_id = 0
+        self.reset_outcome = 'RESET_COMPLETE'
 
     def preflight(self) -> None:
         self.calls.append(("preflight", None))
@@ -78,8 +80,16 @@ class FakeHitlTransport:
             raise self.disable_failure
         self.calls.append(("set_policy_enabled", enabled))
 
-    def start_reset(self) -> None:
-        self.calls.append(("start_reset", None))
+    def start_reset(self) -> int:
+        self.reset_attempt_id += 1
+        self.calls.append(("start_reset", self.reset_attempt_id))
+        return self.reset_attempt_id
+
+    def wait_for_reset_terminal(self, attempt_id: int, timeout_sec: float) -> str:
+        self.calls.append(("wait_for_reset_terminal", (attempt_id, timeout_sec)))
+        if self.wait_failure is not None:
+            raise self.wait_failure
+        return self.reset_outcome
 
     def advance_policy_generation(self) -> int:
         self.generation += 1
@@ -256,14 +266,13 @@ class RightHitlControlAdapterTests(unittest.TestCase):
                     self.adapter.publish(np.ones((1, 7), dtype=np.float64))
                 self.assertIs(raised.exception, failure)
 
-    def test_reset_waits_for_resetting_then_hold(self) -> None:
+    def test_reset_requires_explicit_complete_outcome(self) -> None:
         self.adapter.reset("rotate_button")
         self.assertEqual(
-            self.transport.calls[-3:],
+            self.transport.calls[-2:],
             [
-                ("start_reset", None),
-                ("wait_for_state", ("RESETTING", 15.0, frozenset({"HOLD"}))),
-                ("wait_for_state", ("HOLD", 15.0, frozenset({"RESETTING"}))),
+                ("start_reset", 1),
+                ("wait_for_reset_terminal", (1, 45.0)),
             ],
         )
 
@@ -274,6 +283,29 @@ class RightHitlControlAdapterTests(unittest.TestCase):
                 with self.assertRaises(type(failure)) as raised:
                     self.adapter.reset("rotate_button")
                 self.assertIs(raised.exception, failure)
+
+    def test_reset_incomplete_is_explicitly_recoverable_and_never_arms_policy(self) -> None:
+        self.transport.reset_outcome = 'RESET_INCOMPLETE'
+
+        with self.assertRaises(RuntimeFault) as raised:
+            self.adapter.reset('rotate_button')
+
+        self.assertEqual(raised.exception.code, ErrorCode.RESET_INCOMPLETE)
+        self.assertIn('retry execute', raised.exception.message)
+        self.assertFalse(self.adapter._policy_active)
+        self.assertFalse(self.adapter._policy_armed)
+        self.assertNotIn(('set_policy_enabled', True), self.transport.calls)
+
+    def test_second_reset_uses_new_attempt_identity_after_prior_incomplete(self) -> None:
+        self.transport.reset_outcome = 'RESET_INCOMPLETE'
+        with self.assertRaises(RuntimeFault):
+            self.adapter.reset('rotate_button')
+        self.transport.reset_outcome = 'RESET_COMPLETE'
+
+        self.adapter.reset('rotate_button')
+
+        self.assertIn(('wait_for_reset_terminal', (1, 45.0)), self.transport.calls)
+        self.assertIn(('wait_for_reset_terminal', (2, 45.0)), self.transport.calls)
 
     def test_stop_disables_policy_and_blocks_future_publication(self) -> None:
         self.adapter.begin_stage("rotate_button")

@@ -34,6 +34,7 @@ class ArmPairProfile:
     policy_lease_topic: str | None
     physical_takeover_topic: str | None
     reset_service: str | None
+    reset_outcome_topic: str | None
     prime_ack_timeout_sec: float | None
     policy_lease_interval_sec: float | None
     policy_progress_timeout_sec: float | None

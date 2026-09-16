@@ -28,7 +28,9 @@ class HitlTransport(Protocol):
 
     def set_policy_enabled(self, enabled: bool) -> None: ...
 
-    def start_reset(self) -> None: ...
+    def start_reset(self) -> int: ...
+
+    def wait_for_reset_terminal(self, attempt_id: int, timeout_sec: float) -> str: ...
 
     def wait_for_state(
         self, expected: str, timeout_sec: float, *, pending_states: frozenset[str]
@@ -167,13 +169,19 @@ class RightHitlControlAdapter:
         if self._config.skill_arms[skill] != "right":
             raise ValueError("RightHitlControlAdapter only accepts a right-arm binding")
         self.preflight()
-        self._transport.start_reset()
-        self._transport.wait_for_state(
-            "RESETTING", self._reset_state_timeout_sec, pending_states=frozenset({"HOLD"})
+        attempt_id = self._transport.start_reset()
+        outcome = self._transport.wait_for_reset_terminal(
+            attempt_id, self._reset_state_timeout_sec
         )
-        self._transport.wait_for_state(
-            "HOLD", self._reset_state_timeout_sec, pending_states=frozenset({"RESETTING"})
-        )
+        if outcome == 'RESET_COMPLETE':
+            return
+        if outcome == 'RESET_INCOMPLETE':
+            raise fault(
+                ErrorCode.RESET_INCOMPLETE,
+                'HITL reset incomplete; retry execute to continue reset from current pose',
+                attempt_id=attempt_id,
+            )
+        raise RuntimeError(f'HITL reset attempt {attempt_id} returned unexpected terminal outcome {outcome}')
 
     def begin_stage(self, skill: str) -> None:
         self._require_open()

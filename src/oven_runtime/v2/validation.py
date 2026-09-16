@@ -90,6 +90,9 @@ def _validate_arm_pair(profile: ArmPairProfile) -> None:
             profile.policy_lease_topic, f"HITL arm pair {profile.name}.policy_lease_topic"
         )
         _required_optional_topic(profile.reset_service, f"HITL arm pair {profile.name}.reset_service")
+        _required_optional_topic(
+            profile.reset_outcome_topic, f"HITL arm pair {profile.name}.reset_outcome_topic"
+        )
         _positive_optional_number(
             profile.prime_ack_timeout_sec,
             f"HITL arm pair {profile.name}.prime_ack_timeout_sec",

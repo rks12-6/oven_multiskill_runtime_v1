@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import time
 from collections.abc import Callable
@@ -18,6 +19,34 @@ from std_srvs.srv import SetBool, Trigger
 from oven_runtime.v2.contracts import ArmPairProfile
 
 
+RESET_OUTCOME_SCHEMA_VERSION = 1
+RESET_OUTCOMES = frozenset({'IDLE', 'RESETTING', 'RESET_COMPLETE', 'RESET_INCOMPLETE', 'RESET_FAULT'})
+
+
+def parse_reset_outcome(payload: str) -> tuple[int, str]:
+    """Validate the machine-readable reset contract; never infer it from logs."""
+
+    try:
+        value = json.loads(payload)
+    except (TypeError, json.JSONDecodeError) as error:
+        raise ValueError('invalid HITL reset outcome JSON') from error
+    if not isinstance(value, dict) or value.get('schema_version') != RESET_OUTCOME_SCHEMA_VERSION:
+        raise ValueError('unsupported HITL reset outcome schema')
+    attempt_id = value.get('attempt_id')
+    outcome = value.get('outcome')
+    if not isinstance(outcome, str) or outcome not in RESET_OUTCOMES:
+        raise ValueError('HITL reset outcome value is invalid')
+    if (
+        not isinstance(attempt_id, int)
+        or isinstance(attempt_id, bool)
+        or attempt_id < 0
+        or (outcome == 'IDLE' and attempt_id != 0)
+        or (outcome != 'IDLE' and attempt_id < 1)
+    ):
+        raise ValueError('HITL reset outcome attempt_id is invalid')
+    return attempt_id, outcome
+
+
 class RosHitlTransport(Node):
     """Owns policy input, other-front hold, and HITL public service clients."""
 
@@ -32,6 +61,7 @@ class RosHitlTransport(Node):
             or arm_pair.policy_prime_ready_service is None
             or arm_pair.policy_lease_topic is None
             or arm_pair.reset_service is None
+            or arm_pair.reset_outcome_topic is None
             or arm_pair.other_front_command_topic is None
         ):
             raise ValueError("HITL public endpoints must be configured")
@@ -44,6 +74,9 @@ class RosHitlTransport(Node):
         super().__init__(f"oven_right_hitl_transport_{os.getpid()}")
         self._arm_pair = arm_pair
         self._state: str | None = None
+        self._reset_outcomes: dict[int, str] = {}
+        self._reset_outcome_error: str | None = None
+        self._reset_outcome_lock = Lock()
         self._closed = False
         self._policy_publisher = self.create_publisher(JointState, arm_pair.policy_input_topic, 10)
         self._policy_lease_publisher = self.create_publisher(UInt64, arm_pair.policy_lease_topic, 10)
@@ -57,6 +90,9 @@ class RosHitlTransport(Node):
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
         )
         self.create_subscription(String, arm_pair.hitl_state_topic, self._state_callback, state_qos)
+        self.create_subscription(
+            String, arm_pair.reset_outcome_topic, self._reset_outcome_callback, state_qos
+        )
         if arm_pair.physical_takeover_topic is not None:
             self.create_subscription(
                 UInt64,
@@ -181,10 +217,37 @@ class RosHitlTransport(Node):
         if failure is not None:
             raise RuntimeError(f"HITL policy lease failed closed: {failure}")
 
-    def start_reset(self) -> None:
+    def start_reset(self) -> int:
         response = self._call(self._reset_client, Trigger.Request(), "start_reset")
         if not response.success:
             raise RuntimeError(f"HITL reset request rejected: {response.message}")
+        try:
+            attempt_id, outcome = parse_reset_outcome(response.message)
+        except ValueError as error:
+            raise RuntimeError(f'HITL reset response contract invalid: {error}') from error
+        if outcome != 'RESETTING':
+            raise RuntimeError(f'HITL reset response has unexpected outcome: {outcome}')
+        return attempt_id
+
+    def wait_for_reset_terminal(self, attempt_id: int, timeout_sec: float) -> str:
+        """Wait only for this start-reset attempt, ignoring latched older outcomes."""
+
+        self._require_open()
+        if attempt_id < 1 or timeout_sec <= 0:
+            raise ValueError('reset attempt identity and timeout must be positive')
+        deadline = time.monotonic() + timeout_sec
+        while time.monotonic() < deadline:
+            with self._reset_outcome_lock:
+                parse_error = self._reset_outcome_error
+                outcome = self._reset_outcomes.get(attempt_id)
+            if parse_error is not None:
+                raise RuntimeError(f'HITL reset outcome contract invalid: {parse_error}')
+            if outcome in {'RESET_COMPLETE', 'RESET_INCOMPLETE'}:
+                return outcome
+            if outcome == 'RESET_FAULT' or self._state == 'FAULT':
+                raise RuntimeError(f'HITL reset attempt {attempt_id} entered FAULT')
+            rclpy.spin_once(self, timeout_sec=min(0.1, max(0.0, deadline - time.monotonic())))
+        raise TimeoutError(f'timed out waiting for HITL reset attempt {attempt_id} terminal outcome')
 
     def advance_policy_generation(self) -> int:
         response = self._call(self._generation_client, Trigger.Request(), 'advance_policy_generation')
@@ -359,6 +422,16 @@ class RosHitlTransport(Node):
 
     def _state_callback(self, message: String) -> None:
         self._state = message.data
+
+    def _reset_outcome_callback(self, message: String) -> None:
+        try:
+            attempt_id, outcome = parse_reset_outcome(message.data)
+        except ValueError as error:
+            with self._reset_outcome_lock:
+                self._reset_outcome_error = str(error)
+            return
+        with self._reset_outcome_lock:
+            self._reset_outcomes[attempt_id] = outcome
 
     def _require_open(self) -> None:
         if self._closed:
