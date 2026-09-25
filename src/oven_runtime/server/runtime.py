@@ -225,7 +225,7 @@ class PolicyRuntime:
                     "noise_hash": backend_result.noise_hash,
                     "action_hash": action_hash,
                 }
-                self._audit.record_request(row, backend_result.actions)
+                self._audit.record_request(row, backend_result.actions, request.observation)
             except RuntimeFault as exc:
                 with self._condition:
                     self._fail_locked(exc.code)

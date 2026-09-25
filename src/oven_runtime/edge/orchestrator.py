@@ -15,8 +15,8 @@ from oven_runtime.edge.contracts import (
     ApprovalGate,
     ControlClient,
     InferenceTransport,
-    JointGate,
     ObservationSource,
+    PublishResult,
     ResetController,
     VisualChecker,
 )
@@ -35,7 +35,6 @@ class StagePlan:
     settle_sec: float = 3.0
     reset_before: bool = True
     checker_required: bool = True
-    approved_end_reasons: tuple[str, ...] = ("joint_rest_detected",)
 
     def validate(self) -> None:
         if not self.skill or not isinstance(self.root_seed, int) or isinstance(self.root_seed, bool):
@@ -45,7 +44,6 @@ class StagePlan:
             or self.max_chunks <= 0
             or self.action_steps <= 0
             or self.settle_sec < 0
-            or not self.approved_end_reasons
         ):
             raise ValueError("stage rollout limits are invalid")
 
@@ -56,8 +54,9 @@ class PipelinePlan:
     stages: tuple[StagePlan, ...]
 
     def validate(self) -> None:
-        if tuple(stage.skill for stage in self.stages) != FIXED_SKILL_ORDER:
-            raise ValueError("pipeline skill order must be open_door, transport_food, close_door, rotate_button")
+        skills = tuple(stage.skill for stage in self.stages)
+        if skills != FIXED_SKILL_ORDER and not (len(skills) == 1 and skills[0] in FIXED_SKILL_ORDER):
+            raise ValueError("plan must contain the fixed four-skill pipeline or one declared skill")
         if TRIAL_ID_PATTERN.fullmatch(self.run_id) is None:
             raise ValueError("pipeline run_id format is invalid")
         for index, stage in enumerate(self.stages):
@@ -78,7 +77,6 @@ class PipelineOrchestrator:
         reset_controller: ResetController,
         action_executor: ActionExecutor,
         action_validator: ActionValidator,
-        joint_gate: JointGate,
         checker: VisualChecker,
         approval: ApprovalGate,
         control: ControlClient,
@@ -93,7 +91,6 @@ class PipelineOrchestrator:
         self.reset_controller = reset_controller
         self.action_executor = action_executor
         self.action_validator = action_validator
-        self.joint_gate = joint_gate
         self.checker = checker
         self.approval = approval
         self.control = control
@@ -147,7 +144,7 @@ class PipelineOrchestrator:
         self._transition(PipelineState.READY_TO_ROLLOUT)
         self.action_executor.begin_stage(stage.skill)
         self._transition(PipelineState.ROLLOUT)
-        end_reason = self._rollout(stage, session)
+        rollout_result = self._rollout(stage, session)
         self.action_executor.stop("rollout_complete")
         self._control("close-session", self._active_session_id)
         self._active_session_id = None
@@ -157,9 +154,9 @@ class PipelineOrchestrator:
         self._trial_started = False
 
         self._transition(PipelineState.JOINT_GATE)
-        gate_result = self.joint_gate.evaluate(stage.skill)
-        if not gate_result.passed:
-            raise fault(ErrorCode.JOINT_GATE_FAILED, "joint handoff gate failed", reason=gate_result.reason)
+        gate_result = rollout_result.gate_result
+        if gate_result is None or not gate_result.passed:
+            raise fault(ErrorCode.JOINT_GATE_FAILED, "rollout ended without joint-rest evidence")
 
         self._transition(PipelineState.CHECKING)
         if stage.checker_required:
@@ -181,8 +178,8 @@ class PipelineOrchestrator:
 
         evidence = StageEvidence(
             rollout_exit_code=0,
-            rollout_end_reason=end_reason,
-            rollout_end_reason_approved=end_reason in stage.approved_end_reasons,
+            rollout_end_reason=rollout_result.reason or "joint_rest_detected",
+            rollout_end_reason_approved=True,
             joint_gate=EvidenceStatus.PASSED,
             checker=checker_evidence,
             server_audit=EvidenceStatus.PASSED,
@@ -196,7 +193,7 @@ class PipelineOrchestrator:
         )
         self._transition(PipelineState.HANDOFF)
 
-    def _rollout(self, stage: StagePlan, session: dict[str, Any]) -> str:
+    def _rollout(self, stage: StagePlan, session: dict[str, Any]) -> PublishResult:
         published_steps = 0
         for sequence in range(stage.max_chunks):
             response = self.inference.infer(self._request(session, "infer", sequence))
@@ -223,10 +220,9 @@ class PipelineOrchestrator:
                 }
             )
             if publish_result.stop_requested:
-                reason = publish_result.reason or "executor_stop"
-                if reason not in stage.approved_end_reasons:
-                    raise fault(ErrorCode.STATE_REJECTED, "executor returned an unapproved rollout end reason")
-                return reason
+                if publish_result.gate_result is None or not publish_result.gate_result.passed:
+                    raise fault(ErrorCode.JOINT_GATE_FAILED, "executor stopped without passed joint-rest evidence")
+                return publish_result
         raise fault(
             ErrorCode.JOINT_GATE_FAILED,
             "stage exhausted its action-step budget without joint-rest detection",

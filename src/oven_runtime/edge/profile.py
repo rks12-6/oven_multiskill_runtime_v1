@@ -36,7 +36,13 @@ class AgilexProfile:
     remote_runtime_root: Path
 
 
-def load_agilex_profile(path: Path, *, run_id: str, runtime_root: Path) -> AgilexProfile:
+def load_agilex_profile(
+    path: Path,
+    *,
+    run_id: str,
+    runtime_root: Path,
+    selected_skill: str | None = None,
+) -> AgilexProfile:
     with path.open("rb") as stream:
         raw = tomllib.load(stream)
     if raw.get("schema_version") != 1:
@@ -53,6 +59,8 @@ def load_agilex_profile(path: Path, *, run_id: str, runtime_root: Path) -> Agile
     stages: list[StagePlan] = []
     chunk_rows = _integer(action, "chunk_rows")
     settle_sec = _number(ros, "settle_sec")
+    if selected_skill is not None and selected_skill not in FIXED_SKILL_ORDER:
+        raise ValueError(f"unknown selected skill: {selected_skill}")
     for skill in FIXED_SKILL_ORDER:
         value = _mapping(skills, skill)
         prompt = _string(value, "prompt")
@@ -62,18 +70,20 @@ def load_agilex_profile(path: Path, *, run_id: str, runtime_root: Path) -> Agile
         reset_targets[skill] = reset_target
         skill_arms[skill] = arm
         checker_required = _boolean(value, "checker_required")
-        stages.append(
-            StagePlan(
-                skill=skill,
-                root_seed=_integer(value, "root_seed"),
-                max_chunks=_integer(value, "max_chunks"),
-                action_steps=_integer(value, "max_chunks") * chunk_rows,
-                settle_sec=settle_sec,
-                reset_before=_boolean(value, "reset_before"),
-                checker_required=checker_required,
-                approved_end_reasons=tuple(_string_list(value, "approved_end_reasons")),
+        if selected_skill is None or skill == selected_skill:
+            stages.append(
+                StagePlan(
+                    skill=skill,
+                    root_seed=_integer(value, "root_seed"),
+                    max_chunks=_integer(value, "max_chunks"),
+                    action_steps=_integer(value, "max_chunks") * chunk_rows,
+                    settle_sec=settle_sec,
+                    # A standalone skill has no preceding handoff pose, so it
+                    # always starts from that skill's configured reset target.
+                    reset_before=True if selected_skill is not None else _boolean(value, "reset_before"),
+                    checker_required=checker_required,
+                )
             )
-        )
         gate = _mapping(value, "gate")
         targets_value = gate.get("targets")
         if not isinstance(targets_value, list) or not targets_value:

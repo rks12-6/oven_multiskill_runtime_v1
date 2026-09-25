@@ -107,14 +107,14 @@ class OnlineJointGate:
                 else:
                     self._armed = True
 
-    def reached(self, skill: str, publish_step: int) -> bool:
+    def reached_result(self, skill: str, publish_step: int) -> GateResult | None:
         profile, targets, indices, tolerance, samples = self._snapshot(skill)
         if samples.size == 0:
-            return False
+            return None
         with self._lock:
             armed = self._armed
         if not armed:
-            return False
+            return None
         latest_errors = np.abs(samples[-1, indices] - targets[:, indices])
         departure_tolerance = np.maximum(tolerance, profile.departure_threshold)
         target_is_near = np.all(latest_errors < departure_tolerance, axis=1)
@@ -125,11 +125,16 @@ class OnlineJointGate:
                     latest = self._samples[-1]
                     self._samples.clear()
                     self._samples.append(latest)
-                return False
+                return None
             departed = self._departed
         if not departed or publish_step < profile.min_publish_step or samples.shape[0] < profile.window_samples:
-            return False
-        return self._window_result(profile, targets, indices, tolerance, samples).passed
+            return None
+        result = self._window_result(profile, targets, indices, tolerance, samples)
+        return result if result.passed else None
+
+    def reached(self, skill: str, publish_step: int) -> bool:
+        """Compatibility predicate; runtime callers should preserve reached_result()."""
+        return self.reached_result(skill, publish_step) is not None
 
     def evaluate(self, skill: str) -> GateResult:
         profile, targets, indices, tolerance, samples = self._snapshot(skill)

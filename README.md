@@ -56,8 +56,12 @@ YES RUN <自动生成的 run_id>
 - 四个单臂 policy 的有效输出均为前 7 维；技能配置决定发布到左臂还是右臂。
 - 不额外修改 gripper 数值。
 - 每个 chunk 必须恰好 50 行。
-- 四技能动作预算分别为 600、600、400、1000 行。
+- 四技能动作预算分别为 1000、600、600、1000 行。
 - 未检测到 `joint_rest_detected` 时，耗尽预算是失败，不是成功。
+
+完整四技能流程仅按 profile 对 `open_door` 和 `rotate_button` 执行 reset。若通过
+`--skill open_door|transport_food|close_door|rotate_button` 运行单技能，运行时只执行指定技能，
+并在 rollout 前强制回到该技能配置的 reset target。
 
 ## 部署位置
 
@@ -105,6 +109,8 @@ PYTHONPATH="$PWD/src:$PYTHONPATH" \
 
 程序打印 run plan 后，输入它要求的完整 `YES RUN <run_id>`。随后自动建立 SSH tunnel、依次执行四技能并清理
 session/trial。`--run-id` 可省略，由程序自动生成。
+
+如需单技能运行，在同一入口命令中增加 `--skill <技能名>`；该模式的 run-id 会包含技能名。
 
 注意：`PYTHONPATH` 必须在项目源码后保留原值，否则会覆盖 ROS 提供的 `rclpy` 路径。
 
